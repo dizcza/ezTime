@@ -72,8 +72,9 @@ namespace {
 	ezEvent_t _events[MAX_EVENTS];
 	time_t _last_sync_time = 0;
 	time_t _last_read_t = 0;
-	uint32_t _last_sync_millis = 0;
-	uint16_t _last_read_ms;
+	uint64_t _last_sync_micros = 0;
+	uint32_t _last_read_us;
+	uint32_t _micros_in_sec = 1000000;
 	timeStatus_t _time_status;
 	bool _initialised = false;
 	#ifdef EZTIME_NETWORK_ENABLE
@@ -99,12 +100,11 @@ namespace {
 	}
 
 	time_t nowUTC(const bool update_last_read = true) {
-		time_t t;
-		uint32_t m = millis();
-		t = _last_sync_time + ((m - _last_sync_millis) / 1000);
+		uint64_t us = micros() - _last_sync_micros;
+		time_t t = _last_sync_time + us / _micros_in_sec; //Not always 1M
 		if (update_last_read) {
 			_last_read_t = t;
-			_last_read_ms = (m - _last_sync_millis) % 1000;
+			_last_read_us = us % _micros_in_sec;
 		}
 		return t;
 	}
@@ -376,14 +376,14 @@ namespace ezt {
 		void updateNTP() {
 			deleteEvent(updateNTP);	// Delete any events pointing here, in case called manually
 			time_t t;
-			unsigned long measured_at;
+			uint64_t measured_at;
 			if (queryNTP(_ntp_server, t, measured_at)) {
-				int32_t correction = ( (t - _last_sync_time) * 1000 ) - ( measured_at - _last_sync_millis );
+				int32_t correction = (int32_t)( (uint64_t)(t - _last_sync_time) * _micros_in_sec ) - ( measured_at - _last_sync_micros );
 				_last_sync_time = t;
-				_last_sync_millis = measured_at;
-				_last_read_ms = ( millis() - measured_at) % 1000;
+				_last_sync_micros = measured_at;
+				_last_read_us = ( micros() - measured_at) % _micros_in_sec;
 				info(F("Received time: "));
-				info(UTC.dateTime(t, F("l, d-M-y H:i:s.v T")));
+				info(UTC.dateTime(t, F("l, d-M-y H:i:s.u T")));
 				if (_time_status != timeNotSet) {
 					info(F(" (internal clock was "));
 					if (!correction) {
@@ -391,9 +391,9 @@ namespace ezt {
 					} else {
 						info(String(abs(correction)));
 						if (correction > 0) {
-							infoln(F(" ms fast)"));
+							infoln(F(" us fast)"));
 						} else {
-							infoln(F(" ms slow)"));
+							infoln(F(" us slow)"));
 						}
 					}
 				} else {
@@ -410,9 +410,9 @@ namespace ezt {
 		}
 
 		// This is a nice self-contained NTP routine if you need one: feel free to use it.
-		// It gives you the seconds since 1970 (unix epoch) and the millis() on your system when 
+		// It gives you the seconds since 1970 (unix epoch) and the micros() on your system when 
 		// that happened (by deducting fractional seconds and estimated network latency).
-		bool queryNTP(const String server, time_t &t, unsigned long &measured_at) {
+		bool queryNTP(const String server, time_t &t, uint64_t &measured_at) {
 			info(F("Querying "));
 			info(server);
 			info(F(" ... "));
@@ -443,7 +443,7 @@ namespace ezt {
 	
 			udp.flush();
 			udp.begin(NTP_LOCAL_PORT);
-			unsigned long started = millis();
+			uint64_t started = micros();
 			udp.beginPacket(server.c_str(), 123); //NTP requests are to port 123
 			udp.write(buffer, NTP_PACKET_SIZE);
 			udp.endPacket();
@@ -451,7 +451,7 @@ namespace ezt {
 			// Wait for packet or return false with timed out
 			while (!udp.parsePacket()) {
 				delay (1);
-				if (millis() - started > NTP_TIMEOUT) {
+				if (micros() - started > NTP_TIMEOUT) {
 					udp.stop();	
 					triggerError(TIMEOUT); 
 					return false;
@@ -501,11 +501,11 @@ namespace ezt {
 			}
 
 			// Set the t and measured_at variables that were passed by reference
-			uint32_t done = millis();
-			info(F("success (round trip ")); info(done - started); infoln(F(" ms)"));
+			uint64_t done = micros();
+			info(F("success (round trip ")); info((uint32_t)(done - started)); infoln(F(" us)"));
 			t = secsSince1900 - 2208988800UL;					// Subtract 70 years to get seconds since 1970
-			uint16_t ms = fraction / 4294967UL;					// Turn 32 bit fraction into ms by dividing by 2^32 / 1000 
-			measured_at = done - ((done - started) / 2) - ms;	// Assume symmetric network latency and return when we think the whole second was.
+			uint32_t us = fraction / 4294UL;					// Turn 32 bit fraction into ms by dividing by 2^32 / 1000000 
+			measured_at = done - ((done - started) / 2) - us;	// Assume symmetric network latency and return when we think the whole second was.
 				
 			return true;
 		}
@@ -1156,11 +1156,11 @@ uint8_t Timezone::setEvent(void (*function)(), time_t t /* = TIME_NOW */, const 
 	return 0;
 }
 
-void Timezone::setTime(const time_t t, const uint16_t ms /* = 0 */) {
+void Timezone::setTime(const time_t t, const uint32_t us /* = 0 */) {
 	int16_t offset;
 	offset = getOffset(t);
 	_last_sync_time = t + offset * 60;
-	_last_sync_millis = millis() - ms;
+	_last_sync_micros = micros() - us;
 	_time_status = timeSet;
 }
 
@@ -1321,8 +1321,11 @@ String Timezone::dateTime(time_t t, const ezLocalOrUTC_t local_or_utc, const Str
 				case 'T':	// abbreviation for timezone
 					out += tzname;	
 					break;
+				case 'u':	// microseconds as six digits
+					out += ezt::zeropad(_last_read_us, 6);				
+					break;
 				case 'v':	// milliseconds as three digits
-					out += ezt::zeropad(_last_read_ms, 3);				
+					out += ezt::zeropad(_last_read_us / 1000, 3);				
 					break;
 				#ifdef EZTIME_NETWORK_ENABLE
 					case 'e':	// Timezone identifier (Olson)
@@ -1392,8 +1395,15 @@ uint8_t Timezone::second(time_t t /*= TIME_NOW */, const ezLocalOrUTC_t local_or
 
 uint16_t Timezone::ms(time_t t /*= TIME_NOW */) {
 	// Note that here passing anything but TIME_NOW or LAST_READ is pointless
-	if (t == TIME_NOW) { nowUTC(); return _last_read_ms; }
-	if (t == LAST_READ) return _last_read_ms;
+	if (t == TIME_NOW) { nowUTC(); return _last_read_us / 1000; }
+	if (t == LAST_READ) return _last_read_us / 1000;
+	return 0;
+}
+
+uint32_t Timezone::us(time_t t /*= TIME_NOW */) {
+	// Note that here passing anything but TIME_NOW or LAST_READ is pointless
+	if (t == TIME_NOW) { nowUTC(); return _last_read_us; }
+	if (t == LAST_READ) return _last_read_us;
 	return 0;
 }
 

@@ -145,7 +145,7 @@ typedef struct {
 #define NTP_PACKET_SIZE			48
 #define NTP_LOCAL_PORT			4242
 #define NTP_SERVER				"pool.ntp.org"
-#define NTP_TIMEOUT				1500			// milliseconds
+#define NTP_TIMEOUT				1500000			// microseconds
 #define NTP_INTERVAL			1801				// default update interval in seconds
 #define NTP_RETRY				20				// Retry after this many seconds on failed NTP
 #define NTP_STALE_AFTER			3602				// If update due for this many seconds, set timeStatus to timeNeedsSync
@@ -199,7 +199,7 @@ namespace ezt {
 	String zeropad(const uint32_t number, const uint8_t length);
 
 	#ifdef EZTIME_NETWORK_ENABLE
-		bool queryNTP(const String server, time_t &t, unsigned long &measured_at);
+		bool queryNTP(const String server, time_t &t, uint64_t &measured_at);
 		void setInterval(const uint16_t seconds = 0);
 		void setServer(const String ntp_server = NTP_SERVER);
 		void updateNTP();
@@ -233,13 +233,14 @@ class Timezone {
 		uint8_t minute(time_t t = TIME_NOW, const ezLocalOrUTC_t local_or_utc = LOCAL_TIME);
 		uint8_t month(time_t t = TIME_NOW, const ezLocalOrUTC_t local_or_utc = LOCAL_TIME);	
 		uint16_t ms(time_t t = TIME_NOW);
+		uint32_t us(time_t t = TIME_NOW);
 		time_t now();
 		uint8_t second(time_t t = TIME_NOW, const ezLocalOrUTC_t local_or_utc = LOCAL_TIME);
 		void setDefault();
 		uint8_t setEvent(void (*function)(), const uint8_t hr, const uint8_t min, const uint8_t sec, const uint8_t day, const uint8_t mnth, uint16_t yr);
 		uint8_t setEvent(void (*function)(), time_t t = TIME_NOW, const ezLocalOrUTC_t local_or_utc = LOCAL_TIME);
 		bool setPosix(const String posix);
-		void setTime(const time_t t, const uint16_t ms = 0);
+		void setTime(const time_t t, const uint32_t us = 0);
 		void setTime(const uint8_t hr, const uint8_t min, const uint8_t sec, const uint8_t day, const uint8_t mnth, uint16_t yr);
 		time_t tzTime(time_t t = TIME_NOW, ezLocalOrUTC_t local_or_utc = LOCAL_TIME);
 		time_t tzTime(time_t t, ezLocalOrUTC_t local_or_utc, String &tzname, bool &is_dst, int16_t &offset);		
