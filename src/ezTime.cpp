@@ -99,14 +99,20 @@ namespace {
 		}
 	}
 
-	time_t nowUTC(const bool update_last_read = true) {
-		uint64_t us = micros() - _last_sync_micros;
-		time_t t = _last_sync_time + us / _micros_in_sec; //Not always 1M
+	time_t nowUTC(uint32_t& us, const bool update_last_read = true) {
+		uint64_t us_passed = micros() - _last_sync_micros;
+		time_t t = _last_sync_time + us_passed / _micros_in_sec; //Not always 1M
+		us = (uint32_t)(us_passed % _micros_in_sec);
 		if (update_last_read) {
 			_last_read_t = t;
-			_last_read_us = us % _micros_in_sec;
+			_last_read_us = us;
 		}
 		return t;
+	}
+
+	time_t nowUTC(const bool update_last_read = true) {
+		uint32_t us;
+		return nowUTC(us, update_last_read);
 	}
 
 }
