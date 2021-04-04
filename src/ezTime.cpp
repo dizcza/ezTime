@@ -81,6 +81,9 @@ namespace {
 		uint16_t _ntp_interval = NTP_INTERVAL;
 		String _ntp_server = NTP_SERVER;
 	#endif
+	#ifdef EZTIME_DS3231_ENABLE
+		uint8_t data[7];
+	#endif
 
 	void triggerError(const ezError_t err) {
 		_last_error = err;
@@ -1526,3 +1529,382 @@ namespace ezt {
 	uint16_t year(time_t t /* = TIME_NOW */, const ezLocalOrUTC_t local_or_utc /* = LOCAL_TIME */) { return (defaultTZ->year(t, local_or_utc)); } 
 	uint16_t yearISO(time_t t /* = TIME_NOW */, const ezLocalOrUTC_t local_or_utc /* = LOCAL_TIME */) { return (defaultTZ->yearISO(t, local_or_utc)); }
 }
+
+
+/*!
+ * Based on
+ * \file ErriezDS3231.cpp
+ * \brief DS3231 high precision RTC library for Arduino
+ * \details
+ *      Source:         https://github.com/Erriez/ErriezDS3231
+ *      Documentation:  https://erriez.github.io/ErriezDS3231
+ * MIT License
+ * Copyright (c) 2018 Erriez
+ */
+#ifdef EZTIME_DS3231_ENABLE
+
+	// Initialize and detect DS3231 RTC
+	bool DS3231::begin()
+	{
+		// Check zero bits in status register
+		if (ds3231(DS3231_REG_STATUS) & 0x70) {
+			return true;
+		}
+		return false;	//RTC not detected
+	}
+
+	// Enable or disable oscillator when running on V-BAT
+	// enable
+	//  true: Enable RTC clock when running on V-BAT
+	// false: Stop RTC clock when running on V-BAT. OSF bit will be set
+	// in status register which can be read on next power-on
+	void DS3231::enableOscillator(bool enable)
+	{
+		uint8_t controlReg;
+		controlReg = ds3231(DS3231_REG_CONTROL);
+		if (enable) {
+			// Clear EOSC bit to enable
+			controlReg &= ~(1 << DS3231_CTRL_EOSC);
+		} else {
+			// Set EOSC bit to disable
+			controlReg |= (1 << DS3231_CTRL_EOSC);
+		}
+		ds3231(DS3231_REG_CONTROL, controlReg);
+	}
+
+	// Read RTC OSF (Oscillator Stop Flag) from status
+	// register and optionally clears the OSF bit
+	bool DS3231::isOscillatorStopped(bool clearOSF)
+	{
+		uint8_t statusReg = ds3231(DS3231_REG_STATUS);
+		bool ret = statusReg & (1 << DS3231_STAT_OSF);  // isolate the osc stop flag to return to caller
+		if (ret && clearOSF) {              // clear OSF if it's set and the caller wants to clear it
+			ds3231(DS3231_REG_STATUS, (statusReg & ~(1 << DS3231_STAT_OSF)));
+		}
+		return ret; // true - RTC oscillator was stopped: The date/time data is invalid.
+	}
+
+	// Set the RTC time from a tmElements_t structure and clear the
+	// oscillator stop flag (OSF) in the Control/Status register
+	void DS3231::setTime(tmElements_t &tm)
+	{
+		data[0] = (decToBcd(tm.Second));
+		data[1] = (decToBcd(tm.Minute));
+		data[2] = (decToBcd(tm.Hour));
+		data[3] = tm.Wday - 1;
+		// if tm.Sunday = 1 then RTC.Sunday is 7
+		if(data[3] == 0) data[3] = 7;
+		data[4] = (decToBcd(tm.Day));
+		data[5] = (decToBcd(tm.Month));
+		data[6] = (decToBcd(tmYearToY2k(tm.Year)));
+		// Write BCD encoded data to RTC registers
+		ds3231wr (DS3231_REG_SECONDS, 7, data);
+		//or get us of tm.Second is writen to RTC
+	// ds3231wr (DS3231_REG_MINUTES, 6, data[1]);
+	// ds3231(DS3231_REG_SECONDS, data[0]);
+	// rtc_sec_micros = micros();
+		enableOscillator(true);
+		// Clear oscillator halt flag
+		isOscillatorStopped(true);
+	}
+
+	// year can be given as full four digit year or two digts (2010 or 10 for 2010);  
+	// it is converted to years since 1970
+	void DS3231::setTime(const uint8_t hr, const uint8_t min, const uint8_t sec, const uint8_t day, const uint8_t mnth, uint16_t yr) {
+		tmElements_t tm;
+		if( yr > 99) {
+			yr = yr - 1970;
+		} else {
+			yr += 30; 
+		}
+		tm.Year = yr;
+		tm.Month = mnth;
+		tm.Day = day;
+		tm.Hour = hr;
+		tm.Minute = min;
+		tm.Second = sec;
+		ezt::breakTime(ezt::makeTime(tm), tm);
+		setTime(tm);
+	}
+
+	// Set the RTC to the given time_t value and clear the
+	// OSF in the Control/Status register.
+	void DS3231::setTime(time_t t)
+	{
+		tmElements_t tm;
+		ezt::breakTime(t, tm);
+		setTime(tm);
+	}
+
+	// Read the current time from the RTC
+	// and return it as a time_t value. 
+	// Returns false if an invalid date/time format was read from the RTC.
+	time_t DS3231::now()
+	{
+		tmElements_t tm;
+		ds3231rd(DS3231_REG_SECONDS, 7, &data);
+		tm.Second = bcdToDec(data[0]);
+		tm.Minute = bcdToDec(data[1]);
+		tm.Hour   = bcdToDec(data[2] & 0x3f);    // assumes 24hr clock
+		tm.Wday   = 1 + data[3];
+		if(tm.Wday == 8) tm.Wday = 1;
+		tm.Day    = bcdToDec(data[4]);
+		tm.Month  = bcdToDec(data[5] & 0x1f);	// do not use the Century bit
+		tm.Year   = y2kYearToTm(bcdToDec(data[6])); // +30
+		if ((tm.Second > 59) || 
+			(tm.Minute > 59) || (tm.Hour > 23)  ||
+			(tm.Wday < 1)    || (tm.Wday > 7)   ||        
+			(tm.Day < 1)     || (tm.Day > 31)   ||
+			(tm.Month < 1)   || (tm.Month > 12) ||
+			(tm.Year < 30)   || (tm.Year > 129)) {
+			// Invalid date/time read from RTC: Clear date time
+			memset(&tm, 0x00, sizeof(tmElements_t));
+			return 0;
+		}
+		return( ezt::makeTime(tm) );
+	}
+
+	// Alarm 1 types:
+	//			Alarm1EverySecond
+	//			Alarm1MatchSeconds
+	//			Alarm1MatchMinutes
+	//			Alarm1MatchHours
+	//			Alarm1MatchDay	(of the week)
+	//			Alarm1MatchDate	(day of the month)
+	// Unused matches can be set to zero. The alarm interrupt must be enabled
+	// after setting the alarm, followed by clearing the alarm interrupt flag
+	void DS3231::setAlarm1(ezAlarm1_t alarmType,
+						uint8_t dayDate, uint8_t hr, uint8_t min, uint8_t sec)
+	{
+		data[0] = decToBcd(sec);
+		data[1] = decToBcd(min);
+		data[2] = decToBcd(hr);
+		data[3] = decToBcd(dayDate);
+		if (alarmType & 0x01) { data[0] |= (1 << DS3231_A1M1); }
+		if (alarmType & 0x02) { data[1] |= (1 << DS3231_A1M2); }
+		if (alarmType & 0x04) { data[2] |= (1 << DS3231_A1M3); }
+		if (alarmType & 0x08) { data[3] |= (1 << DS3231_A1M4); }
+		if (alarmType & 0x10) { data[3] |= (1 << DS3231_DYDT); }
+		ds3231wr (DS3231_REG_ALARM1_SEC, 4, data);
+		clearAlarmFlag(Alarm1);
+	}
+
+	// Alarm 2 types:
+	//			Alarm2EveryMinute
+	//			Alarm2MatchMinutes
+	//			Alarm2MatchHours
+	//			Alarm2MatchDay
+	//			Alarm2MatchDate
+	// Unused matches can be set to zero. The alarm interrupt must be enabled
+	// after setting the alarm, followed by clearing the alarm interrupt flag
+	void DS3231::setAlarm2(ezAlarm2_t alarmType, uint8_t dayDate, uint8_t hr, uint8_t min)
+	{
+		data[0] = decToBcd(min);
+		data[1] = decToBcd(hr);
+		data[2] = decToBcd(dayDate);
+		if (alarmType & 0x02) { data[0] |= (1 << DS3231_A1M2); }
+		if (alarmType & 0x04) { data[1] |= (1 << DS3231_A1M3); }
+		if (alarmType & 0x08) { data[2] |= (1 << DS3231_A1M4); }
+		if (alarmType & 0x10) { data[2] |= (1 << DS3231_DYDT); }
+		ds3231wr (DS3231_REG_ALARM2_MIN, 3, data);
+		clearAlarmFlag(Alarm2);
+	}
+
+	// Enable or disable Alarm 1 or 2 interrupt.
+	// Enabling the alarm interrupt will disable the Square Wave output on the INT/SQW pin.
+	// The INT pin remains high until an alarm match occurs.
+	// Alarm1 or Alarm2 enum.
+	void DS3231::alarmInterrupt(ezAlarmId_t alarmId, bool enable)
+	{
+		uint8_t controlReg;
+		clearAlarmFlag(alarmId);
+		controlReg = ds3231(DS3231_REG_CONTROL);
+		// Disable square wave out and enable INT
+		controlReg |= (1 << DS3231_CTRL_INTCN);
+		if (enable) {
+			controlReg |= (1 << (alarmId - 1));
+		} else {
+			controlReg &= ~(1 << (alarmId - 1));
+		}
+		ds3231(DS3231_REG_CONTROL, controlReg);
+	}
+
+
+	// Get Alarm 1 or 2 flag.
+	// Call this function to retrieve the alarm status flag. This function can be used in
+	// polling as well as with interrupts enabled.
+	// The INT pin changes to low when an Alarm 1 or Alarm 2 match occurs and the interrupt is
+	// enabled. The pin remains low until both alarm flags are cleared by the application.
+	// Alarm1 or Alarm2 enum
+	bool DS3231::getAlarmFlag(ezAlarmId_t alarmId)
+	{
+		if (ds3231(DS3231_REG_STATUS) & (1 << (alarmId - 1))) {
+			return true;
+		} else {
+			return false;
+		}
+	}
+
+	// This function should be called when the alarm flag has been handled in polling and
+	// interrupt mode. The INT pin changes to high when both alarm flags are cleared and
+	// alarm interrupts are enabled.
+	// Alarm1 or Alarm2 enum.
+	void DS3231::clearAlarmFlag(ezAlarmId_t alarmId)
+	{
+		uint8_t statusReg;
+		statusReg = ds3231(DS3231_REG_STATUS);
+		statusReg &= ~(1 << (alarmId - 1));
+		ds3231(DS3231_REG_STATUS, statusReg);
+	}
+
+	// Configure SQW (Square Wave) output pin.
+	// This will disable or initialize the SQW clock pin. 
+	// The alarm interrupt INT pin will be disabled.
+	// squareWave configuration:
+	//   Disable:	SquareWaveDisable
+	//       1Hz:   SquareWave1Hz
+	//    1024Hz:   SquareWave1024Hz
+	//    4096Hz:   SquareWave4096Hz
+	//    8192Hz:   SquareWave8192Hz
+	void DS3231::setSquareWave(ezSquareWave_t squareWave)
+	{
+		uint8_t controlReg;
+		controlReg = ds3231(DS3231_REG_CONTROL);
+		controlReg &= ~((1 << DS3231_CTRL_BBSQW) |
+						(1 << DS3231_CTRL_INTCN) |
+						(1 << DS3231_CTRL_RS2) |
+						(1 << DS3231_CTRL_RS1));
+		controlReg |= squareWave;
+		ds3231(DS3231_REG_CONTROL, controlReg);
+	}
+
+	// Enable or disable 32kHz output clock pin.
+	void DS3231::enableClockPin(bool enable)
+	{
+		uint8_t statusReg;
+		statusReg = ds3231(DS3231_REG_STATUS);
+		if (enable) {
+			statusReg |= (1 << DS3231_STAT_EN32KHZ);
+		} else {
+			statusReg &= ~(1 << DS3231_STAT_EN32KHZ);
+		}
+		ds3231(DS3231_REG_STATUS, statusReg);
+	}
+
+	// The aging offset register capacitance value is added or subtracted from the 
+	// capacitance value that the device calculates for each temperature compensation.
+	// Aging offset value -127..127, 0.1ppm per LSB (Factory default value: 0)
+	// Negative values increases the RTC oscillator frequency
+	void DS3231::setAgingOffset(int8_t val)
+	{
+		uint8_t regVal;
+		// Convert 8-bit signed value to register value
+		if (val < 0) {
+			// Calculate two's complement for negative value
+			regVal = ~(-val) + 1;
+		} else {
+			regVal = (uint8_t)val;
+		}
+		ds3231(DS3231_REG_AGING_OFFSET, regVal);
+		// A temperature conversion is required to apply the aging offset change
+		startTemperatureConversion();
+	}
+
+	// The aging offset register capacitance value is added or subtracted from the capacitance
+	// value that the device calculates for each temperature compensation
+	int8_t DS3231::getAgingOffset()
+	{
+		uint8_t regVal;
+		regVal = ds3231(DS3231_REG_AGING_OFFSET);
+		// Convert to 8-bit signed value
+		if (regVal & 0x80) {
+			// Calculate two's complement for negative aging register value
+			return regVal | ~((1 << 8) - 1);
+		} else {
+			// Positive aging register value
+			return regVal;
+		}
+	}
+
+	// Conversion is needed only to read temperature within 64 seconds,
+	// or after changing the aging offset register
+	void DS3231::startTemperatureConversion()
+	{
+		uint8_t controlReg;
+		// Check if temperature busy flag is set
+		if (ds3231(DS3231_REG_STATUS) & (1 << DS3231_STAT_BSY)) {
+			return;
+		}
+		// Start temperature conversion
+		controlReg = ds3231(DS3231_REG_CONTROL) | (1 << DS3231_CTRL_CONV);
+		ds3231(DS3231_REG_CONTROL, controlReg);
+	}
+
+	// temperature in 1/10 degrees Celsius
+	int32_t DS3231::getTemperature()
+	{
+		ds3231rd(DS3231_REG_TEMP_MSB, 2, &data);
+		int32_t temperature = data[0] << 8;	//MSB
+		temperature |= data[1];	//LSB
+		temperature >> 6;
+		// Calculate two's complement when negative
+		if (temperature & 0x200) {
+			temperature |= 0xFC00; // keep negative by setting bits
+		}
+		temperature *= 25;	// value is in .25C increments
+		return temperature;	// Return computed temperature
+	}
+
+	// BCD to decimal conversion.
+	uint8_t DS3231::bcdToDec(uint8_t bcd)
+	{
+		return (uint8_t)(10 * ((bcd & 0xF0) >> 4) + (bcd & 0x0F));
+	}
+
+	// Decimal to BCD conversion.
+	uint8_t DS3231::decToBcd(uint8_t dec)
+	{
+		return (uint8_t)(((dec / 10) << 4) | (dec % 10));
+	}
+
+	// Read register
+	uint8_t DS3231::ds3231(uint8_t reg)
+	{
+		Wire.beginTransmission((uint8_t)adrDS3231);
+		Wire.write(reg);
+		Wire.endTransmission();
+		Wire.requestFrom((uint8_t)adrDS3231, uint8_t(1));
+		return Wire.read();
+	}
+
+	// Write to RTC register
+	void DS3231::ds3231(uint8_t reg, uint8_t value)
+	{
+		Wire.beginTransmission((uint8_t)adrDS3231);
+		Wire.write(reg);
+		Wire.write(value);
+		Wire.endTransmission();
+	}
+
+	// Read buffer from RTC
+	void DS3231::ds3231rd(uint8_t reg, uint8_t len, void *data)
+	{
+		Wire.beginTransmission((uint8_t)adrDS3231);
+		Wire.write(reg);
+		Wire.endTransmission(false);
+		Wire.requestFrom((uint8_t)adrDS3231, len);
+		for (uint8_t i = 0; i < len; i++) ((uint8_t *)data)[i] = (uint8_t)Wire.read();
+	}
+
+	// Write buffer to RTC
+	void DS3231::ds3231wr (uint8_t reg, uint8_t len, void *data)
+	{
+		Wire.beginTransmission((uint8_t)adrDS3231);
+		Wire.write(reg);
+		for (uint8_t i = 0; i < len; i++) Wire.write(((uint8_t *)data)[i]);
+		Wire.endTransmission(true);
+	}
+
+DS3231 RTC;
+
+#endif	// EZTIME_DS3231_ENABLE
