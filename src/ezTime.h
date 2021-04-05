@@ -112,6 +112,9 @@ typedef enum {
 #define FOURTH			4
 #define LAST			5
 
+#define MICROS_IN_SEC_MIN 999969
+#define MICROS_IN_SEC_MAX 1000031
+
 ////////////////////////
 
 
@@ -155,7 +158,7 @@ typedef struct {
 #define TIMEZONED_REMOTE_HOST	"timezoned.rop.nl"
 #define TIMEZONED_REMOTE_PORT	2342
 #define TIMEZONED_LOCAL_PORT	2342
-#define TIMEZONED_TIMEOUT		2000			// milliseconds
+#define TIMEZONED_TIMEOUT		2000000			// microseconds
 
 #define EEPROM_CACHE_LEN		50
 #define MAX_CACHE_PAYLOAD		((EEPROM_CACHE_LEN - 3) / 3) * 4 + ( (EEPROM_CACHE_LEN - 3) % 3)	// 2 bytes for len and date, then 4 to 3 (6-bit) compression on rest 
@@ -178,6 +181,9 @@ typedef struct {
 #define DEFAULT_TIMEFORMAT	COOKIE
 
 namespace ezt {
+	void addSecOnPPS();
+	bool setPPSMicros(const uint32_t us = 1000000);
+	uint32_t getPPSMicros();
 	void breakTime(const time_t time, tmElements_t &tm);
 	time_t compileTime(const String compile_date = __DATE__, const String compile_time = __TIME__);
 	String dayShortStr(const uint8_t month);
@@ -438,10 +444,13 @@ namespace ezt {
 		public:
 			static bool begin(void);
 			static bool isOscillatorStopped(bool clearOSF = false);
+			static timeStatus_t timeStatus(bool clearOSF = false);
 			static void enableOscillator(bool enable);
 			static void setTime(tmElements_t &tm);
 			static void setTime(const uint8_t hr, const uint8_t min, const uint8_t sec, const uint8_t day, const uint8_t month, const uint16_t yr);
 			static void setTime(time_t t);
+			static time_t getSetTime(uint64_t &micros);
+			static time_t getSetTime();
 			static time_t now();
 			static void setAlarm1(ezAlarm1_t alarmType, uint8_t dayDate, const uint8_t hr, const uint8_t min, const uint8_t sec);
 			static void setAlarm2(ezAlarm2_t alarmType, uint8_t dayDate, const uint8_t hr, const uint8_t min);

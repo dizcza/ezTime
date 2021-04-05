@@ -82,6 +82,9 @@ namespace {
 		String _ntp_server = NTP_SERVER;
 	#endif
 	#ifdef EZTIME_DS3231_ENABLE
+		timeStatus_t _rtc_status;
+		time_t _rtc_set_time;
+		uint64_t _rtc_set_micros;
 		uint8_t data[7];
 	#endif
 
@@ -123,6 +126,18 @@ namespace {
 
 
 namespace ezt {
+	
+	void addSecOnPPS(){
+		
+	}
+
+	bool setPPSMicros(const uint32_t us /* = 1000000 */){
+		if((MICROS_IN_SEC_MIN > us) || (us > MICROS_IN_SEC_MAX)) return false;
+		_micros_in_sec = us;
+		return true;
+	}
+
+	uint32_t getPPSMicros(){ return _micros_in_sec; }
 
 	////////// Error handing
 
@@ -826,7 +841,7 @@ String Timezone::getPosix() { return _posix; }
 		
 		udp.flush();
 		udp.begin(TIMEZONED_LOCAL_PORT);
-		unsigned long started = millis();
+		uint64_t started = micros();
 		udp.beginPacket(TIMEZONED_REMOTE_HOST, TIMEZONED_REMOTE_PORT);
 		udp.write((const uint8_t*)location.c_str(), location.length());
 		udp.endPacket();
@@ -834,7 +849,7 @@ String Timezone::getPosix() { return _posix; }
 		// Wait for packet or return false with timed out
 		while (!udp.parsePacket()) {
 			delay (1);
-			if (millis() - started > TIMEZONED_TIMEOUT) {
+			if (micros() - started > TIMEZONED_TIMEOUT) {
 				udp.stop();	
 				triggerError(TIMEOUT);
 				return false;
@@ -845,9 +860,9 @@ String Timezone::getPosix() { return _posix; }
 		recv.reserve(60);
 		while (udp.available()) recv += (char)udp.read();
 		udp.stop();
-		info(F("(round-trip "));
-		info(millis() - started);
-		info(F(" ms)  "));
+		info(F("(round trip "));
+		info((uint32_t)(micros() - started));
+		info(F(" us)  "));
 		if (recv.substring(0,6) == "ERROR ") {
 			_server_error = recv.substring(6);
 			error (SERVER_ERROR);
@@ -1546,6 +1561,7 @@ namespace ezt {
 	// Initialize and detect DS3231 RTC
 	bool DS3231::begin()
 	{
+		_rtc_status = timeNeedsSync;
 		// Check zero bits in status register
 		if (ds3231(DS3231_REG_STATUS) & 0x70) {
 			return true;
@@ -1568,6 +1584,7 @@ namespace ezt {
 		} else {
 			// Set EOSC bit to disable
 			controlReg |= (1 << DS3231_CTRL_EOSC);
+			_rtc_status = timeNotSet;
 		}
 		ds3231(DS3231_REG_CONTROL, controlReg);
 	}
@@ -1584,6 +1601,19 @@ namespace ezt {
 		return ret; // true - RTC oscillator was stopped: The date/time data is invalid.
 	}
 
+	timeStatus_t DS3231::timeStatus(bool clearOSF /* = false */)
+	{
+		uint8_t statusReg = ds3231(DS3231_REG_STATUS);
+		bool oscStopped = statusReg & (1 << DS3231_STAT_OSF);  // isolate the osc stop flag
+		if (oscStopped){
+			if (clearOSF) {	// clear OSF if it's set and the caller wants to clear it
+				ds3231(DS3231_REG_STATUS, (statusReg & ~(1 << DS3231_STAT_OSF)));
+			}
+			_rtc_status = timeNotSet;
+		}
+		return _rtc_status; // RTC oscillator was stopped: The date/time data is invalid.
+	}
+
 	// Set the RTC time from a tmElements_t structure and clear the
 	// oscillator stop flag (OSF) in the Control/Status register
 	void DS3231::setTime(tmElements_t &tm)
@@ -1598,14 +1628,18 @@ namespace ezt {
 		data[5] = (decToBcd(tm.Month));
 		data[6] = (decToBcd(tmYearToY2k(tm.Year)));
 		// Write BCD encoded data to RTC registers
-		ds3231wr (DS3231_REG_SECONDS, 7, data);
-		//or get us of tm.Second is writen to RTC
-	// ds3231wr (DS3231_REG_MINUTES, 6, data[1]);
-	// ds3231(DS3231_REG_SECONDS, data[0]);
-	// rtc_sec_micros = micros();
+		//ds3231wr (DS3231_REG_SECONDS, 7, data);
+		ds3231wr (DS3231_REG_MINUTES, 6, data + 1);
 		enableOscillator(true);
 		// Clear oscillator halt flag
 		isOscillatorStopped(true);
+		// Write tm.Second only the last
+		ds3231(DS3231_REG_SECONDS, data[0]);
+		// Get micros of tm.Second is writen to RTC
+		// Next second mark should be 500us later
+		_rtc_set_micros = micros();
+		_rtc_set_time = ezt::makeTime(tm);
+		_rtc_status = timeSet;
 	}
 
 	// year can be given as full four digit year or two digts (2010 or 10 for 2010);  
@@ -1634,6 +1668,19 @@ namespace ezt {
 		tmElements_t tm;
 		ezt::breakTime(t, tm);
 		setTime(tm);
+	}
+
+	// Return time and micros RTC time was set 
+	time_t DS3231::getSetTime(uint64_t &micros)
+	{
+		micros = _rtc_set_micros;
+		return _rtc_set_time;
+	}
+	
+	// Return time RTC time was set 
+	time_t DS3231::getSetTime()
+	{
+		return _rtc_set_time;
 	}
 
 	// Read the current time from the RTC
