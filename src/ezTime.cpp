@@ -1627,17 +1627,14 @@ namespace ezt {
 		data[4] = (decToBcd(tm.Day));
 		data[5] = (decToBcd(tm.Month));
 		data[6] = (decToBcd(tmYearToY2k(tm.Year)));
+		// Get the nearest micros when tm.Second is writen to RTC
+		// Next second mark should be 500us later
+		_rtc_set_micros = micros();
 		// Write BCD encoded data to RTC registers
-		//ds3231wr (DS3231_REG_SECONDS, 7, data);
-		ds3231wr (DS3231_REG_MINUTES, 6, data + 1);
+		ds3231wr (DS3231_REG_SECONDS, 7, data);
 		enableOscillator(true);
 		// Clear oscillator halt flag
 		isOscillatorStopped(true);
-		// Write tm.Second only the last
-		ds3231(DS3231_REG_SECONDS, data[0]);
-		// Get micros of tm.Second is writen to RTC
-		// Next second mark should be 500us later
-		_rtc_set_micros = micros();
 		_rtc_set_time = ezt::makeTime(tm);
 		_rtc_status = timeSet;
 	}
@@ -1842,7 +1839,7 @@ namespace ezt {
 	// capacitance value that the device calculates for each temperature compensation.
 	// Aging offset value -127..127, 0.1ppm per LSB (Factory default value: 0)
 	// Negative values increases the RTC oscillator frequency
-	void DS3231::setAgingOffset(int8_t val)
+	bool DS3231::setAgingOffset(int8_t val)
 	{
 		uint8_t regVal;
 		// Convert 8-bit signed value to register value
@@ -1854,7 +1851,7 @@ namespace ezt {
 		}
 		ds3231(DS3231_REG_AGING_OFFSET, regVal);
 		// A temperature conversion is required to apply the aging offset change
-		startTemperatureConversion();
+		return startTemperatureConversion();
 	}
 
 	// The aging offset register capacitance value is added or subtracted from the capacitance
@@ -1875,16 +1872,17 @@ namespace ezt {
 
 	// Conversion is needed only to read temperature within 64 seconds,
 	// or after changing the aging offset register
-	void DS3231::startTemperatureConversion()
+	bool DS3231::startTemperatureConversion()
 	{
 		uint8_t controlReg;
 		// Check if temperature busy flag is set
 		if (ds3231(DS3231_REG_STATUS) & (1 << DS3231_STAT_BSY)) {
-			return;
+			return 0;
 		}
 		// Start temperature conversion
 		controlReg = ds3231(DS3231_REG_CONTROL) | (1 << DS3231_CTRL_CONV);
 		ds3231(DS3231_REG_CONTROL, controlReg);
+		return 1;
 	}
 
 	// temperature in 1/10 degrees Celsius

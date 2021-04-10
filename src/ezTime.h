@@ -458,11 +458,10 @@ namespace ezt {
 			static bool getAlarmFlag(ezAlarmId_t alarmId);
 			static void clearAlarmFlag(ezAlarmId_t alarmId);
 			static void setSquareWave(ezSquareWave_t squareWave);
-			//static uint16_t getSquareWave();
 			static void enableClockPin(bool enable);
-			static void setAgingOffset(int8_t val);
+			static bool setAgingOffset(int8_t val);
 			static int8_t getAgingOffset();
-			static void startTemperatureConversion();
+			static bool startTemperatureConversion();
 			static int32_t getTemperature();
 			
 	};
