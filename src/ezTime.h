@@ -23,13 +23,15 @@
 // #define EZTIME_MAX_DEBUGLEVEL_INFO
 
 // Cache mechanism, either EEPROM or NVS, not both. (See README)
-#define EZTIME_CACHE_EEPROM
-// #define EZTIME_CACHE_NVS
+//#define EZTIME_CACHE_EEPROM
+#define EZTIME_CACHE_NVS
 
 // Uncomment if you want to access ezTime functions only after "ezt."
 // (to avoid naming conflicts in bigger projects, e.g.) 
 // #define EZTIME_EZT_NAMESPACE
 
+// DS3231xx RTC connected
+#define EZTIME_DS3231_ENABLE
 
 // Warranty void if edited below this point...
 
@@ -116,6 +118,15 @@ typedef enum {
 #define LEAP_YEAR(Y)	( ((1970+Y)>0) && !((1970+Y)%4) && ( ((1970+Y)%100) || !((1970+Y)%400) ) )
 #define SECS_PER_DAY	(86400UL)
 
+#define MICROS_IN_SEC_MIN 999969
+#define MICROS_IN_SEC_MAX 1000031
+
+//convenience macros to convert to and from tm years 
+#define  tmYearToCalendar(Y) ((Y) + 1970)  // full four digit year 
+#define  CalendarYrToTm(Y)   ((Y) - 1970)
+#define  tmYearToY2k(Y)      ((Y) - 30)    // offset is from 2000
+#define  y2kYearToTm(Y)      ((Y) + 30)
+
 typedef struct  { 
 	uint8_t Second; 
 	uint8_t Minute; 
@@ -145,7 +156,7 @@ typedef struct {
 #define NTP_PACKET_SIZE			48
 #define NTP_LOCAL_PORT			4242
 #define NTP_SERVER				"pool.ntp.org"
-#define NTP_TIMEOUT				1500			// milliseconds
+#define NTP_TIMEOUT				1500000			// microseconds
 #define NTP_INTERVAL			1801				// default update interval in seconds
 #define NTP_RETRY				20				// Retry after this many seconds on failed NTP
 #define NTP_STALE_AFTER			3602				// If update due for this many seconds, set timeStatus to timeNeedsSync
@@ -153,7 +164,7 @@ typedef struct {
 #define TIMEZONED_REMOTE_HOST	"timezoned.rop.nl"
 #define TIMEZONED_REMOTE_PORT	2342
 #define TIMEZONED_LOCAL_PORT	2342
-#define TIMEZONED_TIMEOUT		2000			// milliseconds
+#define TIMEZONED_TIMEOUT		2000000			// microseconds
 
 #define EEPROM_CACHE_LEN		50
 #define MAX_CACHE_PAYLOAD		((EEPROM_CACHE_LEN - 3) / 3) * 4 + ( (EEPROM_CACHE_LEN - 3) % 3)	// 2 bytes for len and date, then 4 to 3 (6-bit) compression on rest 
@@ -176,6 +187,9 @@ typedef struct {
 #define DEFAULT_TIMEFORMAT	COOKIE
 
 namespace ezt {
+	IRAM_ATTR void syncToPPS(void);
+	bool setPPSMicros(const uint32_t us = 1000000);
+	uint32_t getPPSMicros();
 	void breakTime(const time_t time, tmElements_t &tm);
 	time_t compileTime(const String compile_date = __DATE__, const String compile_time = __TIME__);
 	String dayShortStr(const uint8_t month);
@@ -199,7 +213,7 @@ namespace ezt {
 	String zeropad(const uint32_t number, const uint8_t length);
 
 	#ifdef EZTIME_NETWORK_ENABLE
-		bool queryNTP(const String server, time_t &t, unsigned long &measured_at);
+		bool queryNTP(const String server, time_t &t, uint64_t &measured_at);
 		void setInterval(const uint16_t seconds = 0);
 		void setServer(const String ntp_server = NTP_SERVER);
 		void updateNTP();
@@ -233,13 +247,14 @@ class Timezone {
 		uint8_t minute(time_t t = TIME_NOW, const ezLocalOrUTC_t local_or_utc = LOCAL_TIME);
 		uint8_t month(time_t t = TIME_NOW, const ezLocalOrUTC_t local_or_utc = LOCAL_TIME);	
 		uint16_t ms(time_t t = TIME_NOW);
+		uint32_t us(time_t t = TIME_NOW);
 		time_t now();
 		uint8_t second(time_t t = TIME_NOW, const ezLocalOrUTC_t local_or_utc = LOCAL_TIME);
 		void setDefault();
 		uint8_t setEvent(void (*function)(), const uint8_t hr, const uint8_t min, const uint8_t sec, const uint8_t day, const uint8_t mnth, uint16_t yr);
 		uint8_t setEvent(void (*function)(), time_t t = TIME_NOW, const ezLocalOrUTC_t local_or_utc = LOCAL_TIME);
 		bool setPosix(const String posix);
-		void setTime(const time_t t, const uint16_t ms = 0);
+		void setTime(const time_t t, const uint32_t us = 0);
 		void setTime(const uint8_t hr, const uint8_t min, const uint8_t sec, const uint8_t day, const uint8_t mnth, uint16_t yr);
 		time_t tzTime(time_t t = TIME_NOW, ezLocalOrUTC_t local_or_utc = LOCAL_TIME);
 		time_t tzTime(time_t t, ezLocalOrUTC_t local_or_utc, String &tzname, bool &is_dst, int16_t &offset);		
@@ -351,6 +366,146 @@ namespace ezt {
 #define daysToTime_t    ((D)) ( (D) * SECS_PER_DAY) // fixed on Jul 22 2011
 #define weeksToTime_t   ((W)) ( (W) * SECS_PER_WEEK) 
 
+
+/*!
+ * DS3231 high precision RTC library for Arduino
+ * Based on https: https://github.com/Erriez/ErriezDS3231
+ * Documentation : https://erriez.github.io/ErriezDS3231
+ * MIT License
+ * Copyright (c) 2018 Erriez
+ */
+#ifdef EZTIME_DS3231_ENABLE
+
+	#include <Wire.h>
+	#include <stdint.h>
+
+	// #include <stddef.h>
+	// #include "esp_intr_alloc.h"
+	// #include "esp_attr.h"
+	// #include "driver/timer.h"
+
+	const uint8_t adrDS3231 = 0x68;
+
+	#define DS3231_REG_SECONDS      0x00    // Seconds register
+	#define DS3231_REG_MINUTES      0x01    // Minutes register
+	#define DS3231_REG_HOURS        0x02    // Hours register
+	#define DS3231_REG_DAY_WEEK     0x03    // Day of the week register
+	#define DS3231_REG_DAY_MONTH    0x04    // Day of the month register
+	#define DS3231_REG_MONTH        0x05    // Month register
+	#define DS3231_REG_YEAR         0x06    // Year register
+
+	#define DS3231_REG_ALARM1_SEC   0x07    // Alarm 1 seconds register
+	#define DS3231_REG_ALARM1_MIN   0x08    // Alarm 1 minutes register
+	#define DS3231_REG_ALARM1_HOUR  0x09    // Alarm 1 hour register
+	#define DS3231_REG_ALARM1_DD    0x0A    // Alarm 1 day/date register
+	#define DS3231_REG_ALARM2_MIN   0x0B    // Alarm 2 seconds register
+	#define DS3231_REG_ALARM2_HOUR  0x0C    // Alarm 2 hour register
+	#define DS3231_REG_ALARM2_DD    0x0D    // Alarm 2 day/date register
+
+	#define DS3231_REG_CONTROL      0x0E    // Control register
+	#define DS3231_REG_STATUS       0x0F    // Status register
+	#define DS3231_REG_AGING_OFFSET 0x10    // Aging offset register
+	#define DS3231_REG_TEMP_MSB     0x11    // Temperature MSB register
+	#define DS3231_REG_TEMP_LSB     0x12    // Temperature LSB register
+
+	// DS3231 register bit defines
+	#define DS3231_MONTH_CENTURY    7       // Century
+	#define DS3231_HOUR_12H_24H     6       // 12 or 24 hour mode
+	#define DS3231_HOUR_AM_PM       5       // AM/PM
+
+	#define DS3231_CTRL_EOSC        7       // Enable oscillator
+	#define DS3231_CTRL_BBSQW       6       // Battery-Backed Square-Wave Enable
+	#define DS3231_CTRL_CONV        5       // Start temperature conversion
+	#define DS3231_CTRL_RS2         4       // Square wave rate-select 2
+	#define DS3231_CTRL_RS1         3       // Square wave rate-select 1
+	#define DS3231_CTRL_INTCN       2       // Interrupt control
+	#define DS3231_CTRL_A2IE        1       // Alarm 2 interrupt enable
+	#define DS3231_CTRL_A1IE        0       // Alarm 1 interrupt enable
+
+	#define DS3231_STAT_OSF         7       // Oscillator Stop Flag
+	#define DS3231_STAT_EN32KHZ     3       // Enable 32kHz clock output
+	#define DS3231_STAT_BSY         2       // Temperature conversion busy flag
+	#define DS3231_STAT_A2F         1       // Alarm 2 status flag
+	#define DS3231_STAT_A1F         0       // Alarm 1 status flag
+
+	#define DS3231_A1M1             7       // Alarm 1 bit 7 seconds register
+	#define DS3231_A1M2             7       // Alarm 1 bit 7 minutes register
+	#define DS3231_A1M3             7       // Alarm 1 bit 7 hours register
+	#define DS3231_A1M4             7       // Alarm 1 bit 7 day/date register
+	#define DS3231_A2M2             7       // Alarm 2 bit 7 minutes register
+	#define DS3231_A2M3             7       // Alarm 2 bit 7 hours register
+	#define DS3231_A2M4             7       // Alarm 2 bit 7 day/date register
+	#define DS3231_DYDT             6       // Alarm 2 bit 6
+
+	typedef enum {
+		Alarm1 = 1,
+		Alarm2 = 2
+	} AlarmId_t;
+
+	typedef enum {
+		Alarm1EverySecond = 0x0F,   // Alarm once per second
+		Alarm1MatchSeconds = 0x0E,  // Alarm when seconds match
+		Alarm1MatchMinutes = 0x0C,  // Alarm when minutes and seconds match
+		Alarm1MatchHours = 0x08,    // Alarm when hours, minutes, and seconds match
+		Alarm1MatchDay = 0x10,      // Alarm when date, hours, minutes, and seconds match
+		Alarm1MatchDate = 0x00,     // Alarm when day, hours, minutes, and seconds match
+	} Alarm1_t;
+
+	typedef enum {
+		Alarm2EveryMinute = 0x0E,   // Alarm once per minute (00 seconds of every minute)
+		Alarm2MatchMinutes = 0x0C,  // Alarm when minutes match
+		Alarm2MatchHours = 0x08,    // Alarm when hours and minutes match
+		Alarm2MatchDay = 0x10,      // Alarm when date, hours, and minutes match
+		Alarm2MatchDate = 0x00,     // Alarm when day, hours, and minutes match
+	} Alarm2_t;
+
+	typedef enum {
+		SquareWaveDisable = (1 << DS3231_CTRL_INTCN),                           // SQW disable
+		SquareWave1Hz     = ((0 << DS3231_CTRL_RS2) | (0 << DS3231_CTRL_RS1)),	// SQW 1Hz
+		SquareWave1024Hz  = ((0 << DS3231_CTRL_RS2) | (1 << DS3231_CTRL_RS1)),	// SQW 1024Hz
+		SquareWave4096Hz  = ((1 << DS3231_CTRL_RS2) | (0 << DS3231_CTRL_RS1)),	// SQW 4096Hz
+		SquareWave8192Hz  = ((1 << DS3231_CTRL_RS2) | (1 << DS3231_CTRL_RS1)),	// SQW 8192Hz
+	} SquareWave_t;
+
+
+	class DS3231 {
+
+		public:
+			static bool begin(TwoWire &wirePort = Wire);
+			static void enableOsc(bool enable = true);
+			static timeStatus_t timeStatus(bool clearOSF = false);
+		
+			static void setTime(time_t t);
+			static void setTime(const uint8_t hr, const uint8_t min, const uint8_t sec, const uint8_t day, const uint8_t month, const uint16_t yr);
+			static void setTime(tmElements_t &tm);
+			static time_t now();
+			static time_t getSetTime(uint64_t &micros);	//Returns the time when RTC time was set
+
+			static void enableClockPin(bool enable = true);
+			static void setSquareWave(SquareWave_t squareWave);
+
+			static bool setAgingOffset(int8_t val);
+			static int8_t getAgingOffset();
+			static bool startTemperatureConversion();
+			static int32_t getTemperature();
+
+			static void setAlarm1(Alarm1_t alarmType, uint8_t dayDate, const uint8_t hr, const uint8_t min, const uint8_t sec);
+			static void setAlarm2(Alarm2_t alarmType, uint8_t dayDate, const uint8_t hr, const uint8_t min);
+			static void enableInterrupt(AlarmId_t alarmId, bool enable);
+			static bool getAlarmFlag(AlarmId_t alarmId);
+			static void clearAlarmFlag(AlarmId_t alarmId);
+		private:
+			static uint8_t bcdToDec(uint8_t bcd);
+			static uint8_t decToBcd(uint8_t dec);
+			static uint8_t ds3231(uint8_t reg);
+			static void ds3231(uint8_t reg, uint8_t value);
+			static void ds3231rd(uint8_t reg, uint8_t len, void *data);
+			static void ds3231wr(uint8_t reg, uint8_t len, void *data);
+	};
+
+	extern DS3231 RTC;
+
+#endif	// EZTIME_DS3231_ENABLE 
 
 } // extern "C++"
 #endif // __cplusplus

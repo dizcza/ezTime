@@ -72,13 +72,21 @@ namespace {
 	ezEvent_t _events[MAX_EVENTS];
 	time_t _last_sync_time = 0;
 	time_t _last_read_t = 0;
-	uint32_t _last_sync_millis = 0;
-	uint16_t _last_read_ms;
+	uint64_t _last_sync_micros = 0;
+	uint32_t _last_read_us;
+	uint32_t _micros_in_sec = 1000000;
 	timeStatus_t _time_status;
 	bool _initialised = false;
 	#ifdef EZTIME_NETWORK_ENABLE
 		uint16_t _ntp_interval = NTP_INTERVAL;
 		String _ntp_server = NTP_SERVER;
+	#endif
+	#ifdef EZTIME_DS3231_ENABLE
+		TwoWire *_i2cPort;
+		timeStatus_t _rtc_status;
+		time_t _rtc_set_time;
+		uint64_t _rtc_set_micros;
+		uint8_t data[7];
 	#endif
 
 	void triggerError(const ezError_t err) {
@@ -98,15 +106,20 @@ namespace {
 		}
 	}
 
-	time_t nowUTC(const bool update_last_read = true) {
-		time_t t;
-		uint32_t m = millis();
-		t = _last_sync_time + ((m - _last_sync_millis) / 1000);
+	time_t nowUTC(uint32_t& us, const bool update_last_read = true) {
+		uint64_t us_passed = micros() - _last_sync_micros;
+		time_t t = _last_sync_time + us_passed / _micros_in_sec; //Not always 1M
+		us = (uint32_t)(us_passed % _micros_in_sec);
 		if (update_last_read) {
 			_last_read_t = t;
-			_last_read_ms = (m - _last_sync_millis) % 1000;
+			_last_read_us = us;
 		}
 		return t;
+	}
+
+	time_t nowUTC(const bool update_last_read = true) {
+		uint32_t us;
+		return nowUTC(us, update_last_read);
 	}
 
 }
@@ -114,6 +127,21 @@ namespace {
 
 
 namespace ezt {
+	
+	IRAM_ATTR void syncToPPS() {
+		_last_sync_time++;
+		_last_sync_micros = 0;
+		_last_read_t = _last_sync_time + micros() / _micros_in_sec;
+		_last_read_us = micros() % _micros_in_sec;
+	}
+
+	bool setPPSMicros(const uint32_t us /* = 1000000 */){
+		if((MICROS_IN_SEC_MIN > us) || (us > MICROS_IN_SEC_MAX)) return false;
+		_micros_in_sec = us;
+		return true;
+	}
+
+	uint32_t getPPSMicros(){ return _micros_in_sec; }
 
 	////////// Error handing
 
@@ -376,14 +404,14 @@ namespace ezt {
 		void updateNTP() {
 			deleteEvent(updateNTP);	// Delete any events pointing here, in case called manually
 			time_t t;
-			unsigned long measured_at;
+			uint64_t measured_at;
 			if (queryNTP(_ntp_server, t, measured_at)) {
-				int32_t correction = ( (t - _last_sync_time) * 1000 ) - ( measured_at - _last_sync_millis );
+				int32_t correction = (int32_t)( (uint64_t)(t - _last_sync_time) * _micros_in_sec ) - ( measured_at - _last_sync_micros );
 				_last_sync_time = t;
-				_last_sync_millis = measured_at;
-				_last_read_ms = ( millis() - measured_at) % 1000;
+				_last_sync_micros = measured_at;
+				_last_read_us = ( micros() - measured_at) % _micros_in_sec;
 				info(F("Received time: "));
-				info(UTC.dateTime(t, F("l, d-M-y H:i:s.v T")));
+				info(UTC.dateTime(t, F("l, d-M-y H:i:s.u T")));
 				if (_time_status != timeNotSet) {
 					info(F(" (internal clock was "));
 					if (!correction) {
@@ -391,9 +419,9 @@ namespace ezt {
 					} else {
 						info(String(abs(correction)));
 						if (correction > 0) {
-							infoln(F(" ms fast)"));
+							infoln(F(" us fast)"));
 						} else {
-							infoln(F(" ms slow)"));
+							infoln(F(" us slow)"));
 						}
 					}
 				} else {
@@ -410,9 +438,9 @@ namespace ezt {
 		}
 
 		// This is a nice self-contained NTP routine if you need one: feel free to use it.
-		// It gives you the seconds since 1970 (unix epoch) and the millis() on your system when 
+		// It gives you the seconds since 1970 (unix epoch) and the micros() on your system when 
 		// that happened (by deducting fractional seconds and estimated network latency).
-		bool queryNTP(const String server, time_t &t, unsigned long &measured_at) {
+		bool queryNTP(const String server, time_t &t, uint64_t &measured_at) {
 			info(F("Querying "));
 			info(server);
 			info(F(" ... "));
@@ -443,7 +471,7 @@ namespace ezt {
 	
 			udp.flush();
 			udp.begin(NTP_LOCAL_PORT);
-			unsigned long started = millis();
+			uint64_t started = micros();
 			udp.beginPacket(server.c_str(), 123); //NTP requests are to port 123
 			udp.write(buffer, NTP_PACKET_SIZE);
 			udp.endPacket();
@@ -451,7 +479,7 @@ namespace ezt {
 			// Wait for packet or return false with timed out
 			while (!udp.parsePacket()) {
 				delay (1);
-				if (millis() - started > NTP_TIMEOUT) {
+				if (micros() - started > NTP_TIMEOUT) {
 					udp.stop();	
 					triggerError(TIMEOUT); 
 					return false;
@@ -501,11 +529,11 @@ namespace ezt {
 			}
 
 			// Set the t and measured_at variables that were passed by reference
-			uint32_t done = millis();
-			info(F("success (round trip ")); info(done - started); infoln(F(" ms)"));
+			uint64_t done = micros();
+			info(F("success (round trip ")); info((uint32_t)(done - started)); infoln(F(" us)"));
 			t = secsSince1900 - 2208988800UL;					// Subtract 70 years to get seconds since 1970
-			uint16_t ms = fraction / 4294967UL;					// Turn 32 bit fraction into ms by dividing by 2^32 / 1000 
-			measured_at = done - ((done - started) / 2) - ms;	// Assume symmetric network latency and return when we think the whole second was.
+			uint32_t us = fraction / 4294UL;					// Turn 32 bit fraction into ms by dividing by 2^32 / 1000000 
+			measured_at = done - ((done - started) / 2) - us;	// Assume symmetric network latency and return when we think the whole second was.
 				
 			return true;
 		}
@@ -817,7 +845,7 @@ String Timezone::getPosix() { return _posix; }
 		
 		udp.flush();
 		udp.begin(TIMEZONED_LOCAL_PORT);
-		unsigned long started = millis();
+		uint64_t started = micros();
 		udp.beginPacket(TIMEZONED_REMOTE_HOST, TIMEZONED_REMOTE_PORT);
 		udp.write((const uint8_t*)location.c_str(), location.length());
 		udp.endPacket();
@@ -825,7 +853,7 @@ String Timezone::getPosix() { return _posix; }
 		// Wait for packet or return false with timed out
 		while (!udp.parsePacket()) {
 			delay (1);
-			if (millis() - started > TIMEZONED_TIMEOUT) {
+			if (micros() - started > TIMEZONED_TIMEOUT) {
 				udp.stop();	
 				triggerError(TIMEOUT);
 				return false;
@@ -836,9 +864,9 @@ String Timezone::getPosix() { return _posix; }
 		recv.reserve(60);
 		while (udp.available()) recv += (char)udp.read();
 		udp.stop();
-		info(F("(round-trip "));
-		info(millis() - started);
-		info(F(" ms)  "));
+		info(F("(round trip "));
+		info((uint32_t)(micros() - started));
+		info(F(" us)  "));
 		if (recv.substring(0,6) == "ERROR ") {
 			_server_error = recv.substring(6);
 			error (SERVER_ERROR);
@@ -1156,11 +1184,11 @@ uint8_t Timezone::setEvent(void (*function)(), time_t t /* = TIME_NOW */, const 
 	return 0;
 }
 
-void Timezone::setTime(const time_t t, const uint16_t ms /* = 0 */) {
+void Timezone::setTime(const time_t t, const uint32_t us /* = 0 */) {
 	int16_t offset;
 	offset = getOffset(t);
 	_last_sync_time = t + offset * 60;
-	_last_sync_millis = millis() - ms;
+	_last_sync_micros = micros() - us;
 	_time_status = timeSet;
 }
 
@@ -1321,8 +1349,11 @@ String Timezone::dateTime(time_t t, const ezLocalOrUTC_t local_or_utc, const Str
 				case 'T':	// abbreviation for timezone
 					out += tzname;	
 					break;
+				case 'u':	// microseconds as six digits
+					out += ezt::zeropad(_last_read_us, 6);				
+					break;
 				case 'v':	// milliseconds as three digits
-					out += ezt::zeropad(_last_read_ms, 3);				
+					out += ezt::zeropad(_last_read_us / 1000, 3);				
 					break;
 				#ifdef EZTIME_NETWORK_ENABLE
 					case 'e':	// Timezone identifier (Olson)
@@ -1392,8 +1423,15 @@ uint8_t Timezone::second(time_t t /*= TIME_NOW */, const ezLocalOrUTC_t local_or
 
 uint16_t Timezone::ms(time_t t /*= TIME_NOW */) {
 	// Note that here passing anything but TIME_NOW or LAST_READ is pointless
-	if (t == TIME_NOW) { nowUTC(); return _last_read_ms; }
-	if (t == LAST_READ) return _last_read_ms;
+	if (t == TIME_NOW) { nowUTC(); return _last_read_us / 1000; }
+	if (t == LAST_READ) return _last_read_us / 1000;
+	return 0;
+}
+
+uint32_t Timezone::us(time_t t /*= TIME_NOW */) {
+	// Note that here passing anything but TIME_NOW or LAST_READ is pointless
+	if (t == TIME_NOW) { nowUTC(); return _last_read_us; }
+	if (t == LAST_READ) return _last_read_us;
 	return 0;
 }
 
@@ -1510,3 +1548,372 @@ namespace ezt {
 	uint16_t year(time_t t /* = TIME_NOW */, const ezLocalOrUTC_t local_or_utc /* = LOCAL_TIME */) { return (defaultTZ->year(t, local_or_utc)); } 
 	uint16_t yearISO(time_t t /* = TIME_NOW */, const ezLocalOrUTC_t local_or_utc /* = LOCAL_TIME */) { return (defaultTZ->yearISO(t, local_or_utc)); }
 }
+
+#ifdef EZTIME_DS3231_ENABLE
+#include <Wire.h>
+
+	/*!
+	* DS3231 high precision RTC library for Arduino
+	* Based on https: https://github.com/Erriez/ErriezDS3231
+	* Documentation : https://erriez.github.io/ErriezDS3231
+	* MIT License
+	* Copyright (c) 2018 Erriez
+	*/
+
+	// Initialize and detect DS3231 RTC
+	bool DS3231::begin(TwoWire &wirePort /* = Wire */) {
+		_i2cPort = &wirePort;
+		_rtc_status = timeNeedsSync;
+		// Check zero bits in status register
+		if (ds3231(DS3231_REG_STATUS) & 0x70) {
+			return true;
+		}
+		return false;	//RTC not detected
+	}
+
+	// Enable or disable oscillator when running on V-BAT
+	// enable
+	//  true: Enable RTC clock when running on V-BAT
+	// false: Stop RTC clock when running on V-BAT. OSF bit will be set
+	// in status register which can be read on next power-on
+	void DS3231::enableOsc(bool enable) {
+		uint8_t controlReg;
+		controlReg = ds3231(DS3231_REG_CONTROL);
+		if (enable) {
+			// Clear EOSC bit to enable
+			controlReg &= ~(1 << DS3231_CTRL_EOSC);
+		} else {
+			// Set EOSC bit to disable
+			controlReg |= (1 << DS3231_CTRL_EOSC);
+			_rtc_status = timeNotSet;
+		}
+		ds3231(DS3231_REG_CONTROL, controlReg);
+	}
+
+	// Read RTC OSF (Oscillator Stop Flag) from status register
+	// and optionally clears the OSF bit
+	timeStatus_t DS3231::timeStatus(bool clearOSF /* = false */) {
+		uint8_t statusReg = ds3231(DS3231_REG_STATUS);
+		bool oscStopped = statusReg & (1 << DS3231_STAT_OSF);  // isolate the osc stop flag
+		if (oscStopped){
+			if (clearOSF) {	// clear OSF if it's set and the caller wants to clear it
+				ds3231(DS3231_REG_STATUS, (statusReg & ~(1 << DS3231_STAT_OSF)));
+			}
+			_rtc_status = timeNotSet;
+		}
+		return _rtc_status; // RTC oscillator was stopped: The date/time data is invalid.
+	}
+
+
+	// Set the RTC to the given time_t value and clear the
+	// OSF in the Control/Status register.
+	void DS3231::setTime(time_t t) {
+		tmElements_t tm;
+		ezt::breakTime(t, tm);
+		setTime(tm);
+	}
+
+	// year can be given as full four digit year or two digts (2010 or 10 for 2010);  
+	// it is converted to years since 1970
+	void DS3231::setTime(const uint8_t hr, const uint8_t min, const uint8_t sec, const uint8_t day, const uint8_t mnth, uint16_t yr) {
+		tmElements_t tm;
+		if( yr > 99) {
+			yr = yr - 1970;
+		} else {
+			yr += 30; 
+		}
+		tm.Year = yr;
+		tm.Month = mnth;
+		tm.Day = day;
+		tm.Hour = hr;
+		tm.Minute = min;
+		tm.Second = sec;
+		ezt::breakTime(ezt::makeTime(tm), tm);
+		setTime(tm);
+	}
+
+	// Set the RTC time from a tmElements_t structure and clear the
+	// oscillator stop flag (OSF) in the Control/Status register
+	void DS3231::setTime(tmElements_t &tm) {
+		data[0] = (decToBcd(tm.Second));
+		data[1] = (decToBcd(tm.Minute));
+		data[2] = (decToBcd(tm.Hour));
+		data[3] = tm.Wday - 1;
+		// if tm.Sunday = 1 then RTC.Sunday is 7
+		if(data[3] == 0) data[3] = 7;
+		data[4] = (decToBcd(tm.Day));
+		data[5] = (decToBcd(tm.Month));
+		data[6] = (decToBcd(tmYearToY2k(tm.Year)));
+		// Get the nearest micros when tm.Second is writen to RTC
+		// Next second mark should be 500us later
+		_rtc_set_micros = micros();
+		// Write BCD encoded data to RTC registers
+		ds3231wr (DS3231_REG_SECONDS, 7, data);
+		enableOsc(true);
+		// Clear oscillator halt flag
+		timeStatus(true);
+		_rtc_set_time = ezt::makeTime(tm);
+		_rtc_status = timeSet;
+	}
+
+	// Return time and micros RTC time was set 
+	time_t DS3231::getSetTime(uint64_t &micros) {
+		micros = _rtc_set_micros;
+		return _rtc_set_time;
+	}
+
+	// Read the current time from the RTC
+	// and return it as a time_t value. 
+	// Returns false if an invalid date/time format was read from the RTC.
+	time_t DS3231::now() {
+		tmElements_t tm;
+		ds3231rd(DS3231_REG_SECONDS, 7, &data);
+		tm.Second = bcdToDec(data[0]);
+		tm.Minute = bcdToDec(data[1]);
+		tm.Hour   = bcdToDec(data[2] & 0x3f);    // assumes 24hr clock
+		tm.Wday   = 1 + data[3];
+		if(tm.Wday == 8) tm.Wday = 1;
+		tm.Day    = bcdToDec(data[4]);
+		tm.Month  = bcdToDec(data[5] & 0x1f);	// do not use the Century bit
+		tm.Year   = y2kYearToTm(bcdToDec(data[6])); // +30
+		if ((tm.Second > 59) || 
+			(tm.Minute > 59) || (tm.Hour > 23)  ||
+			(tm.Wday < 1)    || (tm.Wday > 7)   ||        
+			(tm.Day < 1)     || (tm.Day > 31)   ||
+			(tm.Month < 1)   || (tm.Month > 12) ||
+			(tm.Year < 30)   || (tm.Year > 129)) {
+			// Invalid date/time read from RTC: Clear date time
+			memset(&tm, 0x00, sizeof(tmElements_t));
+			return 0;
+		}
+		return( ezt::makeTime(tm) );
+	}
+
+	// Alarm 1 types:
+	//			Alarm1EverySecond
+	//			Alarm1MatchSeconds
+	//			Alarm1MatchMinutes
+	//			Alarm1MatchHours
+	//			Alarm1MatchDay	(of the week)
+	//			Alarm1MatchDate	(day of the month)
+	// Unused matches can be set to zero. The alarm interrupt must be enabled
+	// after setting the alarm, followed by clearing the alarm interrupt flag
+	void DS3231::setAlarm1(Alarm1_t alarmType,
+						uint8_t dayDate, uint8_t hr, uint8_t min, uint8_t sec) {
+		data[0] = decToBcd(sec);
+		data[1] = decToBcd(min);
+		data[2] = decToBcd(hr);
+		data[3] = decToBcd(dayDate);
+		if (alarmType & 0x01) { data[0] |= (1 << DS3231_A1M1); }
+		if (alarmType & 0x02) { data[1] |= (1 << DS3231_A1M2); }
+		if (alarmType & 0x04) { data[2] |= (1 << DS3231_A1M3); }
+		if (alarmType & 0x08) { data[3] |= (1 << DS3231_A1M4); }
+		if (alarmType & 0x10) { data[3] |= (1 << DS3231_DYDT); }
+		ds3231wr (DS3231_REG_ALARM1_SEC, 4, data);
+		clearAlarmFlag(Alarm1);
+	}
+
+	// Alarm 2 types:
+	//			Alarm2EveryMinute
+	//			Alarm2MatchMinutes
+	//			Alarm2MatchHours
+	//			Alarm2MatchDay
+	//			Alarm2MatchDate
+	// Unused matches can be set to zero. The alarm interrupt must be enabled
+	// after setting the alarm, followed by clearing the alarm interrupt flag
+	void DS3231::setAlarm2(Alarm2_t alarmType, uint8_t dayDate, uint8_t hr, uint8_t min) {
+		data[0] = decToBcd(min);
+		data[1] = decToBcd(hr);
+		data[2] = decToBcd(dayDate);
+		if (alarmType & 0x02) { data[0] |= (1 << DS3231_A1M2); }
+		if (alarmType & 0x04) { data[1] |= (1 << DS3231_A1M3); }
+		if (alarmType & 0x08) { data[2] |= (1 << DS3231_A1M4); }
+		if (alarmType & 0x10) { data[2] |= (1 << DS3231_DYDT); }
+		ds3231wr (DS3231_REG_ALARM2_MIN, 3, data);
+		clearAlarmFlag(Alarm2);
+	}
+
+	// Enable or disable Alarm 1 or 2 interrupt.
+	// Enabling the alarm interrupt will disable the Square Wave output on the INT/SQW pin.
+	// The INT pin remains high until an alarm match occurs.
+	// Alarm1 or Alarm2 enum.
+	void DS3231::enableInterrupt(AlarmId_t alarmId, bool enable) {
+		uint8_t controlReg;
+		clearAlarmFlag(alarmId);
+		controlReg = ds3231(DS3231_REG_CONTROL);
+		// Disable square wave out and enable INT
+		controlReg |= (1 << DS3231_CTRL_INTCN);
+		if (enable) {
+			controlReg |= (1 << (alarmId - 1));
+		} else {
+			controlReg &= ~(1 << (alarmId - 1));
+		}
+		ds3231(DS3231_REG_CONTROL, controlReg);
+	}
+
+	// Get Alarm 1 or 2 flag.
+	// Call this function to retrieve the alarm status flag. This function can be used in
+	// polling as well as with interrupts enabled.
+	// The INT pin changes to low when an Alarm 1 or Alarm 2 match occurs and the interrupt is
+	// enabled. The pin remains low until both alarm flags are cleared by the application.
+	// Alarm1 or Alarm2 enum
+	bool DS3231::getAlarmFlag(AlarmId_t alarmId) {
+		if (ds3231(DS3231_REG_STATUS) & (1 << (alarmId - 1))) {
+			return true;
+		} else {
+			return false;
+		}
+	}
+
+	// This function should be called when the alarm flag has been handled in polling and
+	// interrupt mode. The INT pin changes to high when both alarm flags are cleared and
+	// alarm interrupts are enabled.
+	// Alarm1 or Alarm2 enum.
+	void DS3231::clearAlarmFlag(AlarmId_t alarmId) {
+		uint8_t statusReg;
+		statusReg = ds3231(DS3231_REG_STATUS);
+		statusReg &= ~(1 << (alarmId - 1));
+		ds3231(DS3231_REG_STATUS, statusReg);
+	}
+
+
+	// Enable or disable 32kHz output clock pin.
+	void DS3231::enableClockPin(bool enable) {
+		uint8_t statusReg;
+		statusReg = ds3231(DS3231_REG_STATUS);
+		if (enable) {
+			statusReg |= (1 << DS3231_STAT_EN32KHZ);
+		} else {
+			statusReg &= ~(1 << DS3231_STAT_EN32KHZ);
+		}
+		ds3231(DS3231_REG_STATUS, statusReg);
+	}
+	
+	// Configure SQW (Square Wave) output pin.
+	// This will disable or initialize the SQW clock pin. 
+	// The alarm interrupt INT pin will be disabled.
+	// squareWave configuration:
+	//   Disable:	SquareWaveDisable
+	//       1Hz:   SquareWave1Hz
+	//    1024Hz:   SquareWave1024Hz
+	//    4096Hz:   SquareWave4096Hz
+	//    8192Hz:   SquareWave8192Hz
+	void DS3231::setSquareWave(SquareWave_t squareWave) {
+		uint8_t controlReg;
+		controlReg = ds3231(DS3231_REG_CONTROL);
+		controlReg &= ~((1 << DS3231_CTRL_BBSQW) |
+						(1 << DS3231_CTRL_INTCN) |
+						(1 << DS3231_CTRL_RS2) |
+						(1 << DS3231_CTRL_RS1));
+		controlReg |= squareWave;
+		ds3231(DS3231_REG_CONTROL, controlReg);
+	}
+
+	// The aging offset register capacitance value is added or subtracted from the 
+	// capacitance value that the device calculates for each temperature compensation.
+	// Aging offset value -127..127, 0.1ppm per LSB (Factory default value: 0)
+	// Negative values increases the RTC oscillator frequency
+	bool DS3231::setAgingOffset(int8_t val) {
+		uint8_t regVal;
+		// Convert 8-bit signed value to register value
+		if (val < 0) {
+			// Calculate two's complement for negative value
+			regVal = ~(-val) + 1;
+		} else {
+			regVal = (uint8_t)val;
+		}
+		ds3231(DS3231_REG_AGING_OFFSET, regVal);
+		// A temperature conversion is required to apply the aging offset change
+		return startTemperatureConversion();
+	}
+
+	// The aging offset register capacitance value is added or subtracted from the capacitance
+	// value that the device calculates for each temperature compensation
+	int8_t DS3231::getAgingOffset() {
+		uint8_t regVal;
+		regVal = ds3231(DS3231_REG_AGING_OFFSET);
+		// Convert to 8-bit signed value
+		if (regVal & 0x80) {
+			// Calculate two's complement for negative aging register value
+			return regVal | ~((1 << 8) - 1);
+		} else {
+			// Positive aging register value
+			return regVal;
+		}
+	}
+
+	// Conversion is needed only to read temperature within 64 seconds,
+	// or after changing the aging offset register
+	bool DS3231::startTemperatureConversion() {
+		uint8_t controlReg;
+		// Check if temperature busy flag is set
+		if (ds3231(DS3231_REG_STATUS) & (1 << DS3231_STAT_BSY)) {
+			return 0;
+		}
+		// Start temperature conversion
+		controlReg = ds3231(DS3231_REG_CONTROL) | (1 << DS3231_CTRL_CONV);
+		ds3231(DS3231_REG_CONTROL, controlReg);
+		return 1;
+	}
+
+	// temperature in 1/10 degrees Celsius
+	int32_t DS3231::getTemperature() {
+		ds3231rd(DS3231_REG_TEMP_MSB, 2, &data);
+		int32_t temperature = data[0] << 8;	//MSB
+		temperature |= data[1];	//LSB
+		temperature >> 6;
+		// Calculate two's complement when negative
+		if (temperature & 0x200) {
+			temperature |= 0xFC00; // keep negative by setting bits
+		}
+		temperature *= 25;	// value is in .25C increments
+		return temperature;	// Return computed temperature
+	}
+
+	// BCD to decimal conversion.
+	uint8_t DS3231::bcdToDec(uint8_t bcd) {
+		return (uint8_t)(10 * ((bcd & 0xF0) >> 4) + (bcd & 0x0F));
+	}
+
+	// Decimal to BCD conversion.
+	uint8_t DS3231::decToBcd(uint8_t dec) {
+		return (uint8_t)(((dec / 10) << 4) | (dec % 10));
+	}
+
+	// Read register
+	uint8_t DS3231::ds3231(uint8_t reg) {
+		_i2cPort->beginTransmission((uint8_t)adrDS3231);
+		_i2cPort->write(reg);
+		_i2cPort->endTransmission();
+		_i2cPort->requestFrom((uint8_t)adrDS3231, uint8_t(1));
+		return _i2cPort->read();
+	}
+
+	// Write to RTC register
+	void DS3231::ds3231(uint8_t reg, uint8_t value) {
+		_i2cPort->beginTransmission((uint8_t)adrDS3231);
+		_i2cPort->write(reg);
+		_i2cPort->write(value);
+		_i2cPort->endTransmission();
+	}
+
+	// Read buffer from RTC
+	void DS3231::ds3231rd(uint8_t reg, uint8_t len, void *data) {
+		_i2cPort->beginTransmission((uint8_t)adrDS3231);
+		_i2cPort->write(reg);
+		_i2cPort->endTransmission(false);
+		_i2cPort->requestFrom((uint8_t)adrDS3231, len);
+		for (uint8_t i = 0; i < len; i++) ((uint8_t *)data)[i] = (uint8_t)_i2cPort->read();
+	}
+
+	// Write buffer to RTC
+	void DS3231::ds3231wr (uint8_t reg, uint8_t len, void *data) {
+		_i2cPort->beginTransmission((uint8_t)adrDS3231);
+		_i2cPort->write(reg);
+		for (uint8_t i = 0; i < len; i++) _i2cPort->write(((uint8_t *)data)[i]);
+		_i2cPort->endTransmission(true);
+	}
+
+DS3231 RTC;
+
+#endif	// EZTIME_DS3231_ENABLE

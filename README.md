@@ -282,13 +282,21 @@ Will return the last time the time was successfully synchronized with the NTP se
 
 ### *queryNTP*
 
-`bool queryNTP(String server, time_t &t, unsigned long &measured_at);`
+`bool queryNTP(String server, time_t &t, uint64_t &measured_at);`
 
-This will send a single query to the NTP server your specify. It will put, in the `t` and `measured_at` variables passed by reference, the UTC unix-time and the `millis()` counter at the time the exact second happened. It does this by subtracting from `millis()` the fractional seconds received in the answer, as well as half the time it took to get an answer. This means it assumes the network delay was symmetrical, meaning it took just as long for the request to get to the server as for the answer to get back.
+This will send a single query to the NTP server your specify. It will put, in the `t` and `measured_at` variables passed by reference, the UTC unix-time and the `micros()` counter at the time the exact second happened. It does this by subtracting from `micros()` the fractional seconds received in the answer, as well as half the time it took to get an answer. This means it assumes the network delay was symmetrical, meaning it took just as long for the request to get to the server as for the answer to get back.
 
 If the time server answers, `queryNTP` returns `true`. If `false` is returned, `error()` will return either `NO_NETWORK` (if the WiFi is not connected) or `TIMEOUT` if a response took more than 1500 milliseconds (defined by `NTP_TIMEOUT` in `ezTime.h`).
 
 Note that this function is used internally by ezTime, but does not by itself set the time ezTime keeps. You will likely never need to call this from your code.
+
+&nbsp;
+
+### *syncToPPS*
+
+`IRAM_ATTR void syncToPPS();`
+
+Will sync the time on top of second to an external PPS signal, e.g. provided by a GPS chipset. This function is intended to be called by an interupt service routine, which is triggered when the PPS line fires.
 
 &nbsp;
 
@@ -483,6 +491,7 @@ We'll start with one of the most powerful functions of ezTime. With `dateTime` y
 | `s` | Seconds with leading zero
 | `T` | abbreviation for timezone, like `CEST`
 | `v` | milliseconds as three digits
+| `u` | microseconds as three digits
 | `e` | Timezone identifier (Olson name), like `Europe/Berlin`
 | `O` | Difference to Greenwich time (GMT) in hours and minutes written together, like `+0200`. Here a positive offset means east of UTC.
 | `P` | Same as O but with a colon between hours and minutes, like `+02:00`
@@ -531,6 +540,7 @@ Returns the current time in seconds since midnight Jan 1st 1970 in the timezone 
 `uint8_t minute(TIME)`<br>
 `uint8_t second(TIME)`<br>
 `uint16_t ms(TIME)`<br>
+`uint32_t us(TIME)`<br>
 `uint8_t day(TIME)`<br>
 `uint8_t weekday(TIME)`<br>
 `uint8_t month(TIME)`<br>
@@ -657,7 +667,7 @@ Buy you can also call `deleteEvent` with the name of the function (again without
 
 ### setTime
 
-`void setTime(time_t t, uint16_t ms = 0)`&nbsp;&nbsp;&nbsp;&nbsp;&mdash;&nbsp;Both assume default timezone if no timezone is prefixed
+`void setTime(time_t t, uint32_t us = 0)`&nbsp;&nbsp;&nbsp;&nbsp;&mdash;&nbsp;Both assume default 7timezone if no timezone is prefixed
 
 `void setTime(uint8_t hr, uint8_t min, uint8_t sec,`<br>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;`uint8_t day, uint8_t mnth, uint16_t yr)`
 
@@ -822,6 +832,260 @@ The NTP timestamps used here run until the 7th of February 2036. NTP itself has 
 Should you be the one doing maintenance on this in some far-ish future: For ezTime I created another overflowing counter: the cache age for the timezone information is written as a single unsigned byte in months after January 2018, so that could theoretically cause problems in 2039, but I think everything will just roll over and use 2039 as the new anchor date.
 
 &nbsp;
+
+# DS3231 high precision I2C RTC library
+
+## Library features
+
+* `<ezTime.h>` compatible
+* Read/write date/time `struct tm`
+* Set/get Unix epoch UTC `time_t`
+* Set/get time (hour, min, sec)
+* Set/get date and time (hour, min, sec, mday, mon, year, wday)
+* Read temperature (0.25 degree resolution)
+* Alarm 1 (second/minute/hour/day/date match) 
+* Alarm 2 (minute/hour/day/date match)
+* Polling and Alarm `INT/SQW` interrupt pin
+* Control `32kHz` out signal (enable/disable)
+* Control `SQW` signal (disable / 1 / 1024 / 4096 / 8192Hz)
+* Configure aging offset
+
+## Hardware
+
+Any Arduino hardware with a I2C interface and `Wire.h` support.
+
+## Usage
+
+**Initialization**
+
+```c++
+#include <Wire.h>
+#include <ErriezDS3231.h>
+
+// Create RTC object
+DS3231 RTC;
+
+void setup()
+{
+    // Initialize TWI with a 100kHz (default) or 400kHz clock
+    Wire.begin();
+    Wire.setClock(400000);
+    
+    // Initialize RTC
+    while (!RTC.begin()) {
+        // Error: Could not detect DS3231 RTC, retry after some time
+        delay(3000);
+    }
+}
+```
+
+**Check oscillator status at startup**
+
+```c++
+// Check oscillator status
+if (RTC.timeStatus() == timeNotSet) {
+    // Error: RTC oscillator stopped. Date/time cannot be trusted. 
+    // Set new date/time before reading date/time.
+
+    // Enable oscillator
+    RTC.enableOsc(true);
+}
+```
+
+**Set Unix Epoch UTC**
+
+```c++
+// Write Unix epoch UTC to RTC
+RTC.setTime(1599416430UL);
+```
+
+**Set date and time**
+
+```c++
+// Write RTC date/time: 13:45:09  31 December 2019  0=Sunday, 2=Tuesday
+RTC.setTime(13, 45, 9,  31, 12, 2019, 2);
+```
+
+**Set date and time using struct tm**
+
+```c++
+struct tm dt;
+
+dt.tm_hour = 12;
+dt.tm_min = 34;
+dt.tm_sec = 56;
+dt.tm_mday = 29;
+dt.tm_mon = 1; // 0=January
+dt.tm_year = 2020-1900;
+dt.tm_wday = 6; // 0=Sunday
+
+RTC.setTime(&dt));
+```
+
+**Get Unix Epoch UTC**
+
+```c++
+time_t t;
+
+// Read Unix epoch UTC from RTC
+t = RTC.now();
+```
+
+
+**Get temperature**
+
+```c++
+int8_t temperature = 0;
+uint8_t fraction = 0;
+
+// Force temperature conversion
+// Without this call, it takes 64 seconds before the temperature is updated.
+if (!RTC.startTemperatureConversion()) {
+    // Error: Start temperature conversion failed 
+}
+
+// Read temperature
+if (!RTC.getTemperature(&temperature, &fraction)) {
+    // Error: Get temperature failed
+}
+
+// Print temperature. The output below is for example: 28.25C
+Serial.print(temperature);
+Serial.print(F("."));
+Serial.print(fraction);
+Serial.println(F("C"));
+```
+
+**Program Alarm 1**
+
+Note: Alarm 1 and Alarm 2 have different behavior. Please refer to the documentation which ```Alarm1Type``` and ```Alarm2Type``` are supported. Some examples:
+
+```c++
+// Generate alarm 1 every second
+RTC.setAlarm1(Alarm1EverySecond, 0, 0, 0, 0);
+
+// Generate alarm 1 every minute and second match
+RTC.setAlarm1(Alarm1EverySecond, 0, 0, 45, 30);
+
+// Generate alarm 1 every day, hour, minute and second match
+RTC.setAlarm1(Alarm1MatchDay, 
+              1,  // Alarm day match (1 = Monday)
+              12, // Alarm hour match
+              45, // Alarm minute match
+              30  // Alarm second match
+);
+```
+
+**Program Alarm 2**
+
+```c++
+// Generate alarm 2 every minute
+RTC.setAlarm2(Alarm2EveryMinute, 0, 0, 0);
+
+// Generate alarm 2 every hour, minute match
+RTC.setAlarm2(Alarm2MatchHours, 0, 23, 59);
+
+// Generate alarm 2 every date, hour, minute match
+RTC.setAlarm2(Alarm2MatchDate, 28, 7, 0);
+```
+
+**Alarm polling**
+
+Note: The ```INT``` pin changes to low when an Alarm 1 or Alarm 2 match occurs and the interrupt is enabled. The pin remains low until both alarm flags are cleared by the application.
+
+```c++
+// Poll alarm 1 flag
+if (RTC.getAlarmFlag(Alarm1)) {
+    // Handle Alarm 1
+    
+    // Clear alarm 1 flag
+	RTC.clearAlarmFlag(Alarm1);
+}
+
+// Poll alarm 2 flag
+if (RTC.getAlarmFlag(Alarm2)) {
+    // Handle Alarm 2
+    
+    // Clear alarm 2 flag
+	RTC.clearAlarmFlag(Alarm2);
+}
+```
+
+**Alarm interrupt**
+
+Note: Enabling interrupt will disable the ```SQW``` output signal.
+
+```c++
+// Uno, Nano, Mini, other 328-based: pin D2 (INT0) or D3 (INT1)
+#define INT_PIN     2
+
+// Alarm interrupt flag must be volatile
+volatile bool alarmInterrupt = false;
+
+
+#if defined(ARDUINO_ARCH_ESP8266) || defined(ARDUINO_ARCH_ESP32)
+ICACHE_RAM_ATTR
+#endif
+void alarmHandler()
+{
+    // Set global interrupt flag
+    alarmInterrupt = true;
+}
+
+void setup()
+{
+    ...
+
+    // Attach to INT0 interrupt falling edge
+    pinMode(INT_PIN, INPUT_PULLUP);
+    attachInterrupt(digitalPinToInterrupt(INT_PIN), alarmHandler, FALLING);
+    
+    // Enable Alarm 1 and 2 interrupts
+    RTC.enableInterrupt(Alarm1, true);
+    RTC.enableInterrupt(Alarm2, true);
+}
+
+void loop()
+{
+    // Check global alarm interrupt flag
+    if (alarmInterrupt) {
+        if (RTC.getAlarmFlag(Alarm1)) {
+            // Handle alarm 1
+            
+            // Clear alarm 1 interrupt
+            RTC.clearAlarmFlag(Alarm1);
+        }
+        
+        if (RTC.getAlarmFlag(Alarm2)) {
+            // Handle alarm 2
+            
+            // Clear alarm 2 interrupt
+            RTC.clearAlarmFlag(Alarm2);
+        }
+    }
+}
+```
+
+**32kHz clock out**
+
+Enable or disable ```32kHz``` output pin.
+
+```c++
+RTC.enableClockPin(true);  // Enable 
+RTC.enableClockPin(false);	// Disable
+```
+
+**Square Wave Out (SQW)**
+
+Note: Enabling ```SQW``` pin will disable the alarm ```INT``` signal.
+
+```c++
+RTC.setSquareWave(SquareWaveDisable);	// Disable
+RTC.setSquareWave(SquareWave1Hz);		// 1Hz
+RTC.setSquareWave(SquareWave1024Hz);	// 1024Hz
+RTC.setSquareWave(SquareWave4096Hz);	// 4096Hz
+RTC.setSquareWave(SquareWave8192Hz);	// 8192Hz
+```
 
 ## Inspiration
 
