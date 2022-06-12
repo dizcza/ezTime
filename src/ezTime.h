@@ -31,7 +31,10 @@
 // #define EZTIME_EZT_NAMESPACE
 
 // DS3231xx RTC connected
-#define EZTIME_DS3231_ENABLE
+//#define EZTIME_DS3231_ENABLE
+
+// RV-3028-C7 RTC connected
+//#define EZTIME_RV3028_ENABLE
 
 // Warranty void if edited below this point...
 
@@ -374,15 +377,11 @@ namespace ezt {
  * MIT License
  * Copyright (c) 2018 Erriez
  */
-#ifdef EZTIME_DS3231_ENABLE
-
+#if defined (EZTIME_DS3231_ENABLE) || defined (ARDUINO_M5Stack_Core_ESP32) || defined (ARDUINO_D1_MINI32)
 	#include <Wire.h>
 	#include <stdint.h>
 
-	// #include <stddef.h>
-	// #include "esp_intr_alloc.h"
-	// #include "esp_attr.h"
-	// #include "driver/timer.h"
+	#define EZTIME_DS3231_ENABLE
 
 	const uint8_t adrDS3231 = 0x68;
 
@@ -443,20 +442,20 @@ namespace ezt {
 	} AlarmId_t;
 
 	typedef enum {
-		Alarm1EverySecond = 0x0F,   // Alarm once per second
-		Alarm1MatchSeconds = 0x0E,  // Alarm when seconds match
-		Alarm1MatchMinutes = 0x0C,  // Alarm when minutes and seconds match
-		Alarm1MatchHours = 0x08,    // Alarm when hours, minutes, and seconds match
-		Alarm1MatchDay = 0x10,      // Alarm when date, hours, minutes, and seconds match
-		Alarm1MatchDate = 0x00,     // Alarm when day, hours, minutes, and seconds match
+		A1_ES       = 0x0F, // Alarm once per second
+		A1_MS		= 0x0E,	// Alarm when seconds match
+		A1_MMSS     = 0x0C, // When minutes and seconds match (once per hour)
+		A1_HHMMSS   = 0x08, // When hours, minutes and seconds match (once per day)
+		A1_WDHHMMSS = 0x10, // When weekday, hours, minutes and seconds match (once per weekday/date)
+		A1_DDHHMMSS = 0x00, // When date, hours, minutes and seconds match (once per weekday/date)
 	} Alarm1_t;
 
 	typedef enum {
-		Alarm2EveryMinute = 0x0E,   // Alarm once per minute (00 seconds of every minute)
-		Alarm2MatchMinutes = 0x0C,  // Alarm when minutes match
-		Alarm2MatchHours = 0x08,    // Alarm when hours and minutes match
-		Alarm2MatchDay = 0x10,      // Alarm when date, hours, and minutes match
-		Alarm2MatchDate = 0x00,     // Alarm when day, hours, and minutes match
+		A2_EM     = 0x0E,	// Alarm once per minute (00 seconds of every minute)
+		A2_MM     = 0x0C,	// Alarm when minutes match
+		A2_HHMM   = 0x08,	// Alarm when hours and minutes match
+		A2_WDHHMM = 0x10,	// Alarm when weekday, hours, and minutes match
+		A2_DDHHMM = 0x00,	// Alarm when date, hours, and minutes match
 	} Alarm2_t;
 
 	typedef enum {
@@ -491,7 +490,9 @@ namespace ezt {
 
 			static void setAlarm1(Alarm1_t alarmType, uint8_t dayDate, const uint8_t hr, const uint8_t min, const uint8_t sec);
 			static void setAlarm2(Alarm2_t alarmType, uint8_t dayDate, const uint8_t hr, const uint8_t min);
-			static void enableInterrupt(AlarmId_t alarmId, bool enable);
+			//static void enableInterrupt(AlarmId_t alarmId, bool enable);
+			static void enableInterrupt(AlarmId_t intId);
+			static void disableInterrupt(AlarmId_t intId);
 			static bool getAlarmFlag(AlarmId_t alarmId);
 			static void clearAlarmFlag(AlarmId_t alarmId);
 		private:
@@ -505,7 +506,279 @@ namespace ezt {
 
 	extern DS3231 RTC;
 
-#endif	// EZTIME_DS3231_ENABLE 
+//#endif	// EZTIME_DS3231_ENABLE 
+
+#elif defined  (EZTIME_RV3028_ENABLE) || defined (ARDUINO_Piranha)
+	#include <Wire.h>
+
+	#define EZTIME_RV3028_ENABLE
+
+	const uint8_t adrRV3028 = 0x52;
+
+	#define RV3028_REG_SECONDS      	0x00
+	#define RV3028_REG_MINUTES      	0x01
+	#define RV3028_REG_HOURS        	0x02
+	#define RV3028_REG_WEEKDAY			0x03
+	#define RV3028_REG_DATE         	0x04
+	#define RV3028_REG_MONTHS        	0x05
+	#define RV3028_REG_YEARS        	0x06
+	#define RV3028_REG_MINUTES_ALM     	0x07
+	#define RV3028_REG_HOURS_ALM       	0x08
+	#define RV3028_REG_DATE_ALM        	0x09
+	#define RV3028_REG_TIMERVAL_0		0x0A
+	#define RV3028_REG_TIMERVAL_1		0x0B
+	#define RV3028_REG_TIMERSTAT_0		0x0C
+	#define RV3028_REG_TIMERSTAT_1		0x0D
+	#define RV3028_REG_STATUS			0x0E
+	#define RV3028_REG_CTRL1			0x0F
+	#define RV3028_REG_CTRL2			0x10
+	#define RV3028_REG_GPBITS			0x11
+	#define RV3028_REG_INT_MASK			0x12
+	#define RV3028_REG_EVENTCTRL		0x13
+	#define RV3028_REG_COUNT_TS			0x14
+	#define RV3028_REG_SECONDS_TS		0x15
+	#define RV3028_REG_MINUTES_TS		0x16
+	#define RV3028_REG_HOURS_TS			0x17
+	#define RV3028_REG_DATE_TS			0x18
+	#define RV3028_REG_MONTH_TS			0x19
+	#define RV3028_REG_YEAR_TS			0x1A
+	#define RV3028_REG_UNIX_TIME0		0x1B
+	#define RV3028_REG_UNIX_TIME1		0x1C
+	#define RV3028_REG_UNIX_TIME2		0x1D
+	#define RV3028_REG_UNIX_TIME3		0x1E
+	#define RV3028_REG_USER_RAM1		0x1F
+	#define RV3028_REG_USER_RAM2		0x20
+	#define RV3028_REG_PASSWORD0		0x21
+	#define RV3028_REG_PASSWORD1		0x22
+	#define RV3028_REG_PASSWORD2		0x23
+	#define RV3028_REG_PASSWORD3		0x24
+	#define RV3028_REG_EEPROM_ADDR		0x25
+	#define RV3028_REG_EEPROM_DATA		0x26
+	#define RV3028_REG_EEPROM_CMD		0x27
+	#define RV3028_REG_ID				0x28
+	#define RV3028_REG_EEPROM_CLKOUT	0x35
+	#define RV3028_REG_EEOffset_8_1		0x36	//bits 8 to 1 of EEOffset. Bit 0 is bit 7 of register 0x37 
+	#define RV3028_REG_EEPROM_BACKUP	0x37
+
+	//BITS IN IMPORTANT REGISTERS
+	//Bits in Status Register
+	#define STATUS_EEBUSY	7
+	#define STATUS_CLKF		6
+	#define STATUS_BSF		5
+	#define STATUS_UF		4
+	#define STATUS_TF		3
+	#define STATUS_AF		2
+	#define STATUS_EVF		1
+	#define STATUS_PORF		0
+
+	//Bits in Control1 Register
+	#define CTRL1_TRPT		7
+	#define CTRL1_WADA		5//Bit 6 not implemented
+	#define CTRL1_USEL		4
+	#define CTRL1_EERD		3
+	#define CTRL1_TE		2
+	#define	CTRL1_TD1		1
+	#define CTRL1_TD0		0
+
+	//Bits in Control2 Register
+	#define CTRL2_TSE		7
+	#define CTRL2_CLKIE		6
+	#define CTRL2_UIE		5
+	#define CTRL2_TIE		4
+	#define CTRL2_AIE		3
+	#define CTRL2_EIE		2
+	#define CTRL2_12_24		1
+	#define CTRL2_RESET		0
+
+	//Bits in Hours register
+	#define HOURS_AM_PM			5
+
+	//Bits in Alarm registers
+	#define MINUTESALM_AE_M		7
+	#define HOURSALM_AE_H		7
+	#define DATE_AE_WD			7
+
+	//Commands for EEPROM Command Register (0x27)
+	#define EEPROMCMD_First				0x00
+	#define EEPROMCMD_Update			0x11
+	#define EEPROMCMD_Refresh			0x12
+	#define EEPROMCMD_WriteSingle		0x21
+	#define EEPROMCMD_ReadSingle		0x22
+
+	//Bits in EEPROM Backup Register
+	#define EEPROMBackup_TCE_BIT		5			//Trickle Charge Enable Bit
+	#define EEPROMBackup_FEDE_BIT		4			//Fast Edge Detection Enable Bit (for Backup Switchover Mode)
+	#define EEPROMBackup_BSM_SHIFT		2			//Backup Switchover Mode shift
+	#define EEPROMBackup_TCR_SHIFT		0			//Trickle Charge Resistor shift
+
+	#define EEPROMBackup_BSM_CLEAR		0b11110011	//Backup Switchover Mode clear
+	#define EEPROMBackup_TCR_CLEAR		0b11111100	//Trickle Charge Resistor clear
+	// #define	TCR_3K						0b00		//Trickle Charge Resistor 3kOhm
+	// #define	TCR_5K						0b01		//Trickle Charge Resistor 5kOhm
+	// #define	TCR_9K						0b10		//Trickle Charge Resistor 9kOhm
+	// #define	TCR_15K						0b11		//Trickle Charge Resistor 15kOhm
+
+	// Clock output register (0x35)
+	#define EEPROMClkout_CLKOE_BIT		7			//1 = CLKOUT pin is enabled. – Default value on delivery 
+	#define EEPROMClkout_CLKSY_BIT		6
+	// Bits 5 and 4 not implemented
+	#define EEPROMClkout_PORIE			3			//0 = No interrupt, or canceled, signal on INT pin at POR. – Default value on delivery
+													//1 = An interrupt signal on INT pin at POR. Retained until the PORF flag is cleared to 0 (no automatic cancellation). 
+	#define EEPROMClkout_FREQ_SHIFT		0			//frequency shift
+	#define FD_CLKOUT_32k				0b000		//32.768 kHz – Default value on delivery 
+	#define FD_CLKOUT_8192				0b001 		//8192 Hz 
+	#define FD_CLKOUT_1024				0b010		//1024 Hz
+	#define FD_CLKOUT_64				0b011		//64 Hz 
+	#define FD_CLKOUT_32				0b100		//32 Hz
+	#define FD_CLKOUT_1					0b101		//1 Hz 
+	#define FD_CLKOUT_TIMER				0b110		//Predefined periodic countdown timer interrupt 
+	#define FD_CLKOUT_LOW				0b111		//CLKOUT = LOW 
+
+
+	#define IMT_MASK_CEIE				3			//Clock output when Event Interrupt bit. 
+	#define IMT_MASK_CAIE				2			//Clock output when Alarm Interrupt bit.
+	#define IMT_MASK_CTIE				1			//Clock output when Periodic Countdown Timer Interrupt bit.
+	#define IMT_MASK_CUIE				0			//Clock output when Periodic Time Update Interrupt bit.
+
+	typedef enum {
+		Alarm1 = 1,
+		Alarm2 = 2,
+		Timer  = 3,
+		TimeUpdate = 4,
+	} InterruptId_t;
+
+	typedef enum {
+		A1_DDHHMMSS = 0, //When date, hours, minutes and seconds match (once per weekday/date)
+		A1_WDHHMMSS = 1, //When weekday, hours, minutes and seconds match (once per weekday/date)
+		A1_HHMMSS   = 4, //When hours, minutes and seconds match (once per day)
+		A1_MMSS     = 6, //When minutes and seconds match (once per hour)
+		A1_OFF    = 7, //Alarm disabled - Default value
+		A1_ES     = 9, //Alarm once per second
+	} Alarm1_t;
+
+// Set the alarm mode in the following way:
+// ALARM_DDHHMM 0: When minutes, hours and weekday/date match (once per weekday/date)
+// ALARM_DDHH 1: When hours and weekday/date match (once per weekday/date)
+// ALARM_DDMM 2: When minutes and weekday/date match (once per hour per weekday/date)
+// ALARM_DD 3: When weekday/date match (once per weekday/date)
+// ALARM_HHMM 4: When hours and minutes match (once per day)
+// ALARM_HH  5: When hours match (once per day)
+// ALARM_MM 6: When minutes match (once per hour)
+// ALARM_OFF 7: All disabled � Default value	
+	typedef enum {
+		A2_DDHHMM = 0, //When date, hours and minutes match (once per date)
+		A2_DDHH   = 1, //When date and hours match (once per month @hour)
+		A2_DDMM   = 2, //When date and minutes match (once per month @minute)
+		A2_DD     = 3, //When date match (once per month)
+		A2_HHMM   = 4, //When hours and minutes match (once per day)
+		A2_HH     = 5, //When hours match (once per day)
+		A2_MM     = 6, //When minutes match (once per hour)
+		A2_OFF    = 7, //Alarm disabled - Default value
+		A2_EM     = 8, //Alarm every minute
+		A2_ES     = 9, //Alarm every second
+		A2_WDHHMM = 10, //When weekday, hours and minutes match (once per date)
+		A2_WDHH   = 11, //When weekday and hours match (once per month @hour)
+		A2_WDMM   = 12, //When weekday and minutes match (once per month @minute)
+		A2_WD     = 13, //When weekday match (once per month)
+	} Alarm2_t;
+
+	typedef enum {
+		EverySecond = 0,
+		EveryMinute = 1,
+	} TimeUpdate_t;
+
+	typedef enum {
+		SquareWaveDisable = 7,
+		PeriodicCountDown = 6,
+		SquareWave1Hz     = 5,
+		SquareWave32Hz    = 4,
+		SquareWave64Hz    = 3,
+		SquareWave1024Hz  = 2,
+		SquareWave8192Hz  = 1,
+		SquareWave32768Hz = 0,
+	} SquareWave_t;
+
+	typedef enum {
+		TCR_3K  = 0,
+		TCR_5K  = 1,
+		TCR_9K  = 2,
+		TCR_15K = 3,
+		TC_OFF  = 4,
+	} TrickleCharge_t;
+
+	typedef enum {
+		BS_OFF     = 0,
+		BS_DIRECT  = 1,
+		BS_STANDBY = 2,
+		BS_LEVEL   = 3,
+	} SwitchOver_t;
+
+	class RV3028 {
+
+		public:
+			static bool begin(TwoWire &wirePort = Wire);
+			static timeStatus_t timeStatus(bool clearPORF = false);
+			static void setTime(time_t t, bool setEpoch = false);
+			static void setTime(const uint8_t hr, const uint8_t min, const uint8_t sec, const uint8_t day, const uint8_t month, const uint16_t yr, bool setLocal = true);
+			static void setTime(tmElements_t &tm, bool setLocal = true);
+			static time_t now(bool getEpoch = false);
+			static time_t getSetTime(uint64_t &micros);	//Returns the time when RTC time was set
+			static void setUnix(time_t t);	//Set the UNIX Time (Real Time and UNIX Time are INDEPENDENT!)
+			static time_t nowUnix();
+
+			//DS3231 compatible alarm types
+			static void setAlarm1(Alarm1_t alarmType, uint8_t dayDate, const uint8_t hour, const uint8_t min, const uint8_t sec, const bool enableClockOut = false);
+			static void setAlarm2(Alarm2_t alarmType, uint8_t dayDate, const uint8_t hour, const uint8_t min, const bool enableClockOut = false);
+
+			static bool setAlarm(time_t t);
+			static bool setAlarm(tmElements_t &tm);
+			static bool isMonthYearMatch();
+			static void setAlarm(uint8_t mode, uint8_t dayDate, const uint8_t hour, const uint8_t min, bool dayNotDate = false, bool enableClockOut = false);
+			static void setUpdate(TimeUpdate_t update = EverySecond, bool enableClockOut = false);
+			static void setTimer(uint16_t timerValue, uint16_t timerFrequency = 1, bool timerRepeat = false, bool startTimer = true, bool setInterrupt = true, bool enableClockOutput = false);
+			static void enableTimer();
+			static void disableTimer();
+			
+			static void enableInterrupt(InterruptId_t intId);
+			static void disableInterrupt(InterruptId_t intId);
+			static bool readInterruptFlag(InterruptId_t intId);
+			static void clearInterruptFlag(InterruptId_t intId);
+
+			static void setSquareWave(SquareWave_t squareWave);
+			static void enableClockOut(bool enable = true);
+			static bool readClockFlag();
+			static void clearClockFlag();
+
+			static void setTrickleCharge(TrickleCharge_t trickCharge = TCR_15K); //Trickle Charge Resistor default 15k
+			static bool setBackupSwitchover(SwitchOver_t switchOver = BS_LEVEL);
+
+			static uint8_t reset();  //Returns ID register
+			static uint8_t status(); //Returns the status byte
+			static void clearInterrupts();
+
+		// 	static bool setAgingOffset(int8_t val);
+		// 	static int8_t getAgingOffset();
+
+		private:
+			static uint8_t bcdToDec(uint8_t bcd);
+			static uint8_t decToBcd(uint8_t dec);
+			static uint8_t rv3028(uint8_t reg);
+			static bool rv3028(uint8_t reg, uint8_t value);
+			static void rv3028rd(uint8_t reg, uint8_t len, void *data);
+			static void rv3028wr(uint8_t reg, uint8_t len, void *data);
+
+			static void setBit(uint8_t reg, uint8_t bitNum);
+			static void clearBit(uint8_t reg, uint8_t bitNum);
+			static bool readBit(uint8_t reg, uint8_t bitNum);
+
+			static uint8_t readConfigEEPROM_RAMmirror(uint8_t eepromAddr);
+			static bool writeConfigEEPROM_RAMmirror(uint8_t eepromAddr, uint8_t value);
+			static bool waitforEEPROM();
+	};
+
+	extern RV3028 RTC;
+
+#endif	// EZTIME_RV3028_ENABLE
 
 } // extern "C++"
 #endif // __cplusplus

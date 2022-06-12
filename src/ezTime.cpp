@@ -81,9 +81,11 @@ namespace {
 		uint16_t _ntp_interval = NTP_INTERVAL;
 		String _ntp_server = NTP_SERVER;
 	#endif
-	#ifdef EZTIME_DS3231_ENABLE
+	#if defined (EZTIME_DS3231_ENABLE) || defined (EZTIME_RV3028_ENABLE)
+		#define HAS_RTC
 		TwoWire *_i2cPort;
 		timeStatus_t _rtc_status;
+		uint8_t _alarm_mode;
 		time_t _rtc_set_time;
 		uint64_t _rtc_set_micros;
 		uint8_t data[7];
@@ -1549,7 +1551,7 @@ namespace ezt {
 	uint16_t yearISO(time_t t /* = TIME_NOW */, const ezLocalOrUTC_t local_or_utc /* = LOCAL_TIME */) { return (defaultTZ->yearISO(t, local_or_utc)); }
 }
 
-#ifdef EZTIME_DS3231_ENABLE
+#if defined (EZTIME_DS3231_ENABLE) || defined (ARDUINO_M5Stack_Core_ESP32) || defined (ARDUINO_D1_MINI32)
 #include <Wire.h>
 
 	/*!
@@ -1566,9 +1568,9 @@ namespace ezt {
 		_rtc_status = timeNeedsSync;
 		// Check zero bits in status register
 		if (ds3231(DS3231_REG_STATUS) & 0x70) {
-			return true;
+			return false;
 		}
-		return false;	//RTC not detected
+		return true;	//RTC is fine
 	}
 
 	// Enable or disable oscillator when running on V-BAT
@@ -1690,12 +1692,12 @@ namespace ezt {
 	}
 
 	// Alarm 1 types:
-	//			Alarm1EverySecond
-	//			Alarm1MatchSeconds
-	//			Alarm1MatchMinutes
-	//			Alarm1MatchHours
-	//			Alarm1MatchDay	(of the week)
-	//			Alarm1MatchDate	(day of the month)
+	//			A1_ES
+	//			A1_MS
+	//			A1_MMSS
+	//			A1_HHMMSS
+	//			A1_WDHHMMSS	(of the week)
+	//			A1_DDHHMMSS	(day of the month)
 	// Unused matches can be set to zero. The alarm interrupt must be enabled
 	// after setting the alarm, followed by clearing the alarm interrupt flag
 	void DS3231::setAlarm1(Alarm1_t alarmType,
@@ -1714,11 +1716,11 @@ namespace ezt {
 	}
 
 	// Alarm 2 types:
-	//			Alarm2EveryMinute
-	//			Alarm2MatchMinutes
-	//			Alarm2MatchHours
-	//			Alarm2MatchDay
-	//			Alarm2MatchDate
+	//			A2_EM
+	//			A2_MM
+	//			A2_HHMM
+	//			A2_WDHHMM
+	//			A2_DDHHMM
 	// Unused matches can be set to zero. The alarm interrupt must be enabled
 	// after setting the alarm, followed by clearing the alarm interrupt flag
 	void DS3231::setAlarm2(Alarm2_t alarmType, uint8_t dayDate, uint8_t hr, uint8_t min) {
@@ -1733,21 +1735,28 @@ namespace ezt {
 		clearAlarmFlag(Alarm2);
 	}
 
-	// Enable or disable Alarm 1 or 2 interrupt.
+	// Enable Alarm 1 or 2 interrupt.
 	// Enabling the alarm interrupt will disable the Square Wave output on the INT/SQW pin.
 	// The INT pin remains high until an alarm match occurs.
 	// Alarm1 or Alarm2 enum.
-	void DS3231::enableInterrupt(AlarmId_t alarmId, bool enable) {
+	void DS3231::enableInterrupt(AlarmId_t alarmId) {
 		uint8_t controlReg;
 		clearAlarmFlag(alarmId);
 		controlReg = ds3231(DS3231_REG_CONTROL);
 		// Disable square wave out and enable INT
 		controlReg |= (1 << DS3231_CTRL_INTCN);
-		if (enable) {
-			controlReg |= (1 << (alarmId - 1));
-		} else {
-			controlReg &= ~(1 << (alarmId - 1));
-		}
+		controlReg |= (1 << (alarmId - 1));
+		ds3231(DS3231_REG_CONTROL, controlReg);
+	}
+
+	// Disable Alarm 1 or 2 interrupt.
+	void DS3231::disableInterrupt(AlarmId_t alarmId) {
+		uint8_t controlReg;
+		clearAlarmFlag(alarmId);
+		controlReg = ds3231(DS3231_REG_CONTROL);
+		// Disable square wave out and enable INT
+		controlReg |= (1 << DS3231_CTRL_INTCN);
+		controlReg &= ~(1 << (alarmId - 1));
 		ds3231(DS3231_REG_CONTROL, controlReg);
 	}
 
@@ -1861,7 +1870,7 @@ namespace ezt {
 		ds3231rd(DS3231_REG_TEMP_MSB, 2, &data);
 		int32_t temperature = data[0] << 8;	//MSB
 		temperature |= data[1];	//LSB
-		temperature >> 6;
+		temperature >>= 6;
 		// Calculate two's complement when negative
 		if (temperature & 0x200) {
 			temperature |= 0xFC00; // keep negative by setting bits
@@ -1916,4 +1925,673 @@ namespace ezt {
 
 DS3231 RTC;
 
-#endif	// EZTIME_DS3231_ENABLE
+//#endif	// EZTIME_DS3231_ENABLE
+
+#elif defined (EZTIME_RV3028_ENABLE) || defined (ARDUINO_Piranha)
+#include <Wire.h>
+
+	// Initialize and detect RV-3028-C7 RTC
+	bool RV3028::begin(TwoWire &wirePort /* = Wire */) {
+		_i2cPort = &wirePort;
+		_rtc_status = timeNeedsSync;
+		_alarm_mode = A2_DDHHMM;
+		uint8_t setting = rv3028(RV3028_REG_CTRL2);
+		// Reads RESET bit in CTRL2 register
+		if (setting & (1 << CTRL2_RESET)){
+			_rtc_status = timeNotSet;
+			return false;	//RTC not detected
+		} else if (setting & (1 << CTRL2_12_24)){
+			_rtc_status = timeNotSet;
+			setting &= ~(1 << CTRL2_12_24);   //Clear 12/24 bit
+			rv3028(RV3028_REG_CTRL2, setting);
+			delay(1);
+		}
+		setBit(RV3028_REG_CTRL1, CTRL1_WADA); //Alarm on Date
+		setBackupSwitchover();
+		return true;
+	}
+
+	// Read RTC PORF (Power On Reset Flag) and optionally clears it
+	timeStatus_t RV3028::timeStatus(bool clearPORF /* = false */) {
+		uint8_t statusReg = rv3028(RV3028_REG_STATUS);
+		if (statusReg & (1 << STATUS_PORF)){
+			// RTC was POR: The date/time data is invalid.
+			_rtc_status = timeNotSet;
+			if (clearPORF)
+				rv3028(RV3028_REG_STATUS, (statusReg & ~(1 << STATUS_PORF)));
+		}
+		return _rtc_status;
+	}
+
+	// Set the RTC to the given time_t value and clear the
+	// PORF in the Status register.
+	void RV3028::setTime(time_t t, bool setEpoch) {
+		if (setEpoch) setUnix(t);
+		tmElements_t tm;
+		ezt::breakTime(t, tm);
+		setTime(tm);
+	}
+
+	// year can be given as full four digit year or two digts (2010 or 10 for 2010);  
+	// it is converted to years since 1970
+	void RV3028::setTime(const uint8_t hr, const uint8_t min, const uint8_t sec, const uint8_t day, const uint8_t mnth, uint16_t yr, bool setEpoch) {
+		tmElements_t tm;
+		if( yr > 99) {
+			yr = yr - 1970;
+		} else {
+			yr += 30; 
+		}
+		tm.Year = yr;
+		tm.Month = mnth;
+		tm.Day = day;
+		tm.Hour = hr;
+		tm.Minute = min;
+		tm.Second = sec;
+		time_t t = ezt::makeTime(tm);
+		if (setEpoch) setUnix(t);
+		ezt::breakTime(t, tm);
+		setTime(tm);
+	}
+
+	// _time[TIME_SECONDS] = decToBcd(sec);
+	// _time[TIME_MINUTES] = decToBcd(min);
+	// _time[TIME_HOURS] = decToBcd(hour);
+	// _time[TIME_WEEKDAY] = decToBcd(weekday);
+	// _time[TIME_DATE] = decToBcd(date);
+	// _time[TIME_MONTH] = decToBcd(month);
+	// _time[TIME_YEAR] = decToBcd(year - 2000);
+
+	// Set the RTC time from a tmElements_t structure and clear the
+	// oscillator stop flag (OSF) in the Control/Status register
+	void RV3028::setTime(tmElements_t &tm, bool setEpoch) {
+		data[0] = (decToBcd(tm.Second));
+		data[1] = (decToBcd(tm.Minute));
+		data[2] = (decToBcd(tm.Hour));
+		data[3] = tm.Wday - 1;
+		// if tm.Sunday = 1 then RTC.Sunday is 7
+		if(data[3] == 0) data[3] = 7;
+		data[4] = (decToBcd(tm.Day));
+		data[5] = (decToBcd(tm.Month));
+		data[6] = (decToBcd(tmYearToY2k(tm.Year)));
+
+		_rtc_set_time = ezt::makeTime(tm);
+		if (setEpoch) setUnix(_rtc_set_time);
+		// Get the nearest micros when tm.Second is writen to RTC
+		// Next second mark should be 500us later
+		_rtc_set_micros = micros();
+
+		// Write BCD encoded data to RTC registers
+		rv3028wr(RV3028_REG_SECONDS, 7, data);
+
+		// Clear PORF
+		timeStatus(true);
+		_rtc_status = timeSet;
+	}
+
+	// Return time and micros RTC time was set 
+	time_t RV3028::getSetTime(uint64_t &micros) {
+		micros = _rtc_set_micros;
+		return _rtc_set_time;
+	}
+
+	// Read the current time from the RTC
+	// and return it as a time_t value. 
+	// Returns false if an invalid date/time format was read from the RTC.
+	time_t RV3028::now(bool getEpoch) {
+		if (getEpoch) {
+			return nowUnix();
+		} else {
+			tmElements_t tm;
+			rv3028rd(RV3028_REG_SECONDS, 7, &data);
+			tm.Second = bcdToDec(data[0]);
+			tm.Minute = bcdToDec(data[1]);
+			tm.Hour   = bcdToDec(data[2] & 0x3f);    // assumes 24hr clock
+			tm.Wday   = 1 + data[3];
+			if(tm.Wday == 8) tm.Wday = 1;
+			tm.Day    = bcdToDec(data[4]);
+			tm.Month  = bcdToDec(data[5] & 0x1f);	// do not use the Century bit
+			tm.Year   = y2kYearToTm(bcdToDec(data[6])); // +30
+			if ((tm.Second > 59) || 
+				(tm.Minute > 59) || (tm.Hour > 23)  ||
+				(tm.Wday < 1)    || (tm.Wday > 7)   ||        
+				(tm.Day < 1)     || (tm.Day > 31)   ||
+				(tm.Month < 1)   || (tm.Month > 12) ||
+				(tm.Year < 30)   || (tm.Year > 129)) {
+				// Invalid date/time read from RTC: Clear date time
+				memset(&tm, 0x00, sizeof(tmElements_t));
+				return 0;
+			}
+			return( ezt::makeTime(tm) );
+		}
+	}
+
+	//Note: Real Time and UNIX Time are INDEPENDENT!
+	void RV3028::setUnix(time_t t){
+		data[0] = t;
+		data[1] = t >> 8;
+		data[2] = t >> 16;
+		data[3] = t >> 24;
+		rv3028wr(RV3028_REG_UNIX_TIME0, 4, data);
+	}
+
+	//Note: Real Time and UNIX Time are INDEPENDENT!
+	time_t RV3028::nowUnix(){
+		rv3028rd(RV3028_REG_UNIX_TIME0, 4, data);
+		return (time_t)((uint32_t)data[3] << 24) | ((uint32_t)data[2] << 16) | ((uint32_t)data[1] << 8) | data[0];
+	}
+
+	bool RV3028::setAlarm(time_t t) {
+		tmElements_t tm;
+		ezt::breakTime(t, tm);
+		return setAlarm(tm);
+	}
+
+	bool RV3028::setAlarm(tmElements_t &tm) {
+		disableInterrupt(Alarm2);
+		clearInterruptFlag(Alarm2);
+		rv3028rd(RV3028_REG_MONTHS, 2, &data);	//read month and year only
+		//Get alarm's month and year offset from the current ones
+		uint8_t _yearMonthOffset = tm.Year - y2kYearToTm(bcdToDec(data[1])); // +30
+		if (_yearMonthOffset > 7) return false;	//AlarmYear is out off range
+		_yearMonthOffset = (_yearMonthOffset << 4) + (tm.Month - bcdToDec(data[0] & 0x1f));	// do not use the Century bit
+		rv3028(RV3028_REG_GPBITS, _yearMonthOffset);
+
+		setBit(RV3028_REG_CTRL1, CTRL1_WADA);
+		data[0] = (decToBcd(tm.Minute));
+		data[1] = (decToBcd(tm.Hour));
+		data[2] = (decToBcd(tm.Day));
+		rv3028wr(RV3028_REG_MINUTES_ALM, 3, data);
+		enableInterrupt(Alarm2);
+		return true;
+	}
+
+	//call once in alarm ISR
+	bool RV3028::isMonthYearMatch() {
+		uint8_t alarmYearMonth = rv3028(RV3028_REG_GPBITS);
+		uint8_t alarmYear = alarmYearMonth >> 4;
+		uint8_t alarmMonth = alarmYearMonth & 0x0F;
+		
+		if(alarmMonth == bcdToDec(rv3028(RV3028_REG_MONTHS))) {
+			if(alarmYear > 0) {
+				alarmYear--;
+				//update alarmYearMonth in GP Reg
+				alarmYearMonth = (alarmYear << 4) + alarmMonth;
+				rv3028(RV3028_REG_GPBITS, alarmYearMonth);
+				return false;
+			} else {
+				//alarmYear == 0 && alarmMonth == calendarMonth
+				return true;
+			}
+		} else {
+			return false;
+		}
+	}
+
+	// time_t makeTime(const uint8_t hour, const uint8_t minute, const uint8_t second, const uint8_t day, const uint8_t month, const uint16_t year) {
+	// 	tmElements_t tm;
+	// 	tm.Hour = hour;
+	// 	tm.Minute = minute;
+	// 	tm.Second = second;
+	// 	tm.Day = day;
+	// 	tm.Month = month;
+	// 	if (year > 68) {			// time_t cannot reach beyond 68 + 1970 anyway, so if bigger user means actual years
+	// 		tm.Year = year - 1970;
+	// 	} else {
+	// 		tm.Year = year;
+	// 	}
+	// 	return makeTime(tm);
+	// }
+
+	void RV3028::setAlarm1(Alarm1_t alarmType, uint8_t dayDate, uint8_t hour, uint8_t min, uint8_t sec, bool enableClockOut /* false */) {
+		rv3028rd(RV3028_REG_SECONDS, 7, &data);
+		tmElements_t tm;
+		tm.Year   = y2kYearToTm(bcdToDec(data[6])); // +30
+		tm.Month  = bcdToDec(data[5]);
+		tm.Day    = bcdToDec(data[4]);
+		tm.Wday   = bcdToDec(data[3]);
+		tm.Hour   = bcdToDec(data[2]);
+		tm.Minute = bcdToDec(data[1]);
+		tm.Second = bcdToDec(data[0]);
+		// Get alarm date not weekday
+		uint8_t alarmDate = dayDate;
+		if (alarmType == A1_WDHHMMSS){
+			int8_t daysTillAlarm = dayDate - tm.Wday;
+			if(daysTillAlarm < 0) daysTillAlarm += 7;
+			tm.Day += daysTillAlarm;
+			alarmDate = tm.Day;
+		}
+
+		if(alarmDate < tm.Day) tm.Month++;	//Alarm is next month
+		else if(alarmDate == tm.Day){		//Alarm can be next month
+			if(hour < tm.Hour) tm.Month++;
+			else if (hour == tm.Hour){
+				if(min < tm.Minute) tm.Month++;
+				else if (min == tm.Minute){
+					if(sec <= tm.Second) tm.Month++;
+				}
+			}
+		}
+		time_t alarmTime = makeTime(tm.Hour, tm.Minute, tm.Second, tm.Day, tm.Month, tm.Year);
+//		alarmTime = makeTime(hour, min, sec, bcdToDec(data[4]) + daysTillAlarm, bcdToDec(data[5]), y2kYearToTm(bcdToDec(data[6])));
+		uint8_t clockBit;
+		InterruptId_t intId;
+		_alarm_mode = (uint8_t)alarmType;
+		uint8_t dhm = _alarm_mode;
+		if (_alarm_mode >= A2_WDHHMM){
+			clearBit(RV3028_REG_CTRL1, CTRL1_WADA);
+			dhm -= 10;
+			intId = Alarm2;
+			clockBit = IMT_MASK_CAIE;
+		} else if (_alarm_mode == A2_ES){
+			setUpdate(EverySecond);
+			intId = TimeUpdate;
+			clockBit = IMT_MASK_CUIE;
+		} else {
+			setBit(RV3028_REG_CTRL1, CTRL1_WADA);
+			intId = Alarm2;
+			clockBit = IMT_MASK_CAIE;
+		}
+		disableInterrupt(intId);
+		clearInterruptFlag(intId);
+		data[0] = decToBcd(min);
+		data[1] = decToBcd(hour);
+		data[2] = decToBcd(dayDate);
+		if (dhm & 0x01) data[0] |= 1 << MINUTESALM_AE_M;
+		if (dhm & 0x02) data[1] |= 1 << HOURSALM_AE_H;
+		if (dhm & 0x04) data[2] |= 1 << DATE_AE_WD;
+		rv3028wr(RV3028_REG_MINUTES_ALM, 3, data);
+		enableInterrupt(intId);
+		if (enableClockOut)
+			setBit(RV3028_REG_INT_MASK, clockBit);
+		else
+			clearBit(RV3028_REG_INT_MASK, clockBit);
+	}
+
+
+	void RV3028::setAlarm2(Alarm2_t alarmType, uint8_t dayDate, uint8_t hour, uint8_t min, bool enableClockOut /* false */) {
+		InterruptId_t intId;
+		uint8_t clockBit;
+		_alarm_mode = (uint8_t)alarmType;
+		uint8_t dhm = _alarm_mode;
+		if (_alarm_mode >= A2_WDHHMM){
+			clearBit(RV3028_REG_CTRL1, CTRL1_WADA);
+			dhm -= 10;
+			intId = Alarm2;
+			clockBit = IMT_MASK_CAIE;
+		} else if (_alarm_mode == A2_ES){
+			setUpdate(EverySecond);
+			intId = TimeUpdate;
+			clockBit = IMT_MASK_CUIE;
+		} else if (_alarm_mode == A2_EM){
+			setUpdate(EveryMinute);
+			intId = TimeUpdate;
+			clockBit = IMT_MASK_CUIE;
+		} else {
+			setBit(RV3028_REG_CTRL1, CTRL1_WADA);
+			intId = Alarm2;
+			clockBit = IMT_MASK_CAIE;
+		}
+		disableInterrupt(intId);
+		clearInterruptFlag(intId);
+		data[0] = decToBcd(min);
+		data[1] = decToBcd(hour);
+		data[2] = decToBcd(dayDate);
+		if (dhm & 0x01) data[0] |= 1 << MINUTESALM_AE_M;
+		if (dhm & 0x02) data[1] |= 1 << HOURSALM_AE_H;
+		if (dhm & 0x04) data[2] |= 1 << DATE_AE_WD;
+		rv3028wr(RV3028_REG_MINUTES_ALM, 3, data);
+		enableInterrupt(intId);
+		if (enableClockOut)
+			setBit(RV3028_REG_INT_MASK, clockBit);
+		else
+			clearBit(RV3028_REG_INT_MASK, clockBit);
+	}
+
+	/*********************************
+	Set the alarm mode in the following way:
+	0: Match weekday/date, hours, minutes (once per weekday/date)
+	1: Match weekday/date, hours (once per weekday/date)
+	2: Match weekday/date, minutes (once per hour per weekday/date)
+	3: Match weekday/date (once per weekday/date)
+	4: Match hours, minutes (once per day)
+	5: Match hours (once per day)
+	6: Match minutes (once per hour)
+	7: All disabled � Default value
+	If you want to set a weekday alarm (dayNotDate = true), set 'dayDate' from 0 (Sunday) to 6 (Saturday)
+	********************************/
+	void RV3028::setAlarm(uint8_t mode, uint8_t dayDate, uint8_t hour, uint8_t min, bool dayNotDate /* false */, bool enableClockOut /* false */) {
+		disableInterrupt(Alarm2);
+		clearInterruptFlag(Alarm2);
+		if (dayNotDate)
+			clearBit(RV3028_REG_CTRL1, CTRL1_WADA);
+		else
+			setBit(RV3028_REG_CTRL1, CTRL1_WADA);
+		data[0] = decToBcd(min);
+		data[1] = decToBcd(hour);
+		data[2] = decToBcd(dayDate);
+		if (mode > 0b111) mode = 0b111;
+		if (mode & 0b001) data[0] |= 1 << MINUTESALM_AE_M;
+		if (mode & 0b010) data[1] |= 1 << HOURSALM_AE_H;
+		if (mode & 0b100) data[2] |= 1 << DATE_AE_WD;
+		rv3028wr(RV3028_REG_MINUTES_ALM, 3, data);
+		enableInterrupt(Alarm2);
+		if (enableClockOut)
+			setBit(RV3028_REG_INT_MASK, IMT_MASK_CAIE);
+		else
+			clearBit(RV3028_REG_INT_MASK, IMT_MASK_CAIE);
+	}
+
+	void RV3028::setUpdate(TimeUpdate_t update /* EverySecond */, bool enableClockOut /* false*/){
+		disableInterrupt(TimeUpdate);
+		clearInterruptFlag(TimeUpdate);
+		if (update == EverySecond)
+			clearBit(RV3028_REG_CTRL1, CTRL1_USEL);
+		else 
+			setBit(RV3028_REG_CTRL1, CTRL1_USEL);
+		setBit(RV3028_REG_CTRL2, CTRL2_UIE);
+		if (enableClockOut)
+			setBit(RV3028_REG_INT_MASK, IMT_MASK_CUIE);
+		else
+			clearBit(RV3028_REG_INT_MASK, IMT_MASK_CUIE);
+	}
+
+	void RV3028::setTimer(uint16_t timerValue, uint16_t timerFrequency /* 1 */, bool timerRepeat /* false */, bool startTimer /* true */, bool setInterrupt /* true */, bool enableClockOutput /* false */){
+		disableTimer();
+		disableInterrupt(Timer);
+		clearInterruptFlag(Timer);
+		rv3028(RV3028_REG_TIMERVAL_0, timerValue & 0xff);
+		rv3028(RV3028_REG_TIMERVAL_1, timerValue >> 8);
+		uint8_t ctrl1 = rv3028(RV3028_REG_CTRL1);
+		if (timerRepeat)
+			ctrl1 |=   1 << CTRL1_TRPT;
+		else
+			ctrl1 &= ~(1 << CTRL1_TRPT);
+		switch (timerFrequency){
+			case 4096:		// 4096Hz (default)		// up to 122us error on first time
+				ctrl1 &= ~3; // Clear both the bits
+				break;
+			case 64:		// 64Hz					// up to 7.813ms error on first time
+				ctrl1 &= ~3; // Clear both the bits
+				ctrl1 |= 1;
+				break;
+			case 1:			// 1Hz					// up to 7.813ms error on first time
+				ctrl1 &= ~3; // Clear both the bits
+				ctrl1 |= 2;
+				break;
+			case 60000:		// 1/60Hz				// up to 7.813ms error on first time
+				ctrl1 |= 3; // Set both bits
+				break;
+		}
+		if (setInterrupt){
+			enableInterrupt(Timer);
+		}
+		if (startTimer){
+			ctrl1 |= (1 << CTRL1_TE);
+		}
+		rv3028(RV3028_REG_CTRL1, ctrl1);
+		if (enableClockOut)
+			setBit(RV3028_REG_INT_MASK, IMT_MASK_CTIE);
+		else
+			clearBit(RV3028_REG_INT_MASK, IMT_MASK_CTIE);
+	}
+
+	void RV3028::enableTimer(){
+		setBit(RV3028_REG_CTRL1, CTRL1_TE);
+	}
+
+	void RV3028::disableTimer(){
+		clearBit(RV3028_REG_CTRL1, CTRL1_TE);
+	}
+
+	void RV3028::setSquareWave(SquareWave_t squareWave){
+		uint8_t EEPROMClkout = readConfigEEPROM_RAMmirror(RV3028_REG_EEPROM_CLKOUT);
+		EEPROMClkout |= (uint8_t)squareWave << EEPROMClkout_FREQ_SHIFT;
+		writeConfigEEPROM_RAMmirror(RV3028_REG_EEPROM_CLKOUT, EEPROMClkout);
+		if(squareWave == PeriodicCountDown)
+			setBit(RV3028_REG_CTRL2, CTRL2_CLKIE);
+	}
+
+	void RV3028::enableClockOut(bool enable){
+		uint8_t EEPROMClkout = readConfigEEPROM_RAMmirror(RV3028_REG_EEPROM_CLKOUT);
+		if (enable){
+			EEPROMClkout |= 1 << EEPROMClkout_CLKOE_BIT;
+		} else {
+			clearBit(RV3028_REG_CTRL2, CTRL2_CLKIE);
+			EEPROMClkout &= ~(1 << EEPROMClkout_CLKOE_BIT);
+		}
+		writeConfigEEPROM_RAMmirror(RV3028_REG_EEPROM_CLKOUT, EEPROMClkout);
+	}
+
+	bool RV3028::readClockFlag(){
+		return readBit(RV3028_REG_STATUS, STATUS_CLKF);
+	}
+
+	void RV3028::clearClockFlag(){
+		clearBit(RV3028_REG_STATUS, STATUS_CLKF);
+	}
+
+	void RV3028::enableInterrupt(InterruptId_t intId){
+		switch(intId){
+			case Alarm1:
+				setBit(RV3028_REG_CTRL2, CTRL2_TIE);
+				break;
+			case Alarm2:
+				setBit(RV3028_REG_CTRL2, CTRL2_AIE);
+				break;
+			case Timer:
+				setBit(RV3028_REG_CTRL2, CTRL2_TIE);
+				break;
+			case TimeUpdate:
+				setBit(RV3028_REG_CTRL2, CTRL2_UIE);
+				break;
+		}
+	}
+
+	//Only disables the interrupt (not the alarm flag)
+	void RV3028::disableInterrupt(InterruptId_t intId){
+		switch(intId){
+			case Alarm1:
+				clearBit(RV3028_REG_CTRL2, CTRL2_TIE);
+				break;
+			case Alarm2:
+				clearBit(RV3028_REG_CTRL2, CTRL2_AIE);
+				break;
+			case Timer:
+				clearBit(RV3028_REG_CTRL2, CTRL2_TIE);
+				break;
+			case TimeUpdate:
+				clearBit(RV3028_REG_CTRL2, CTRL2_UIE);
+				break;
+		}
+	}
+
+	bool RV3028::readInterruptFlag(InterruptId_t intId){
+		switch(intId){
+			case Alarm1:
+				return readBit(RV3028_REG_STATUS, STATUS_TF);
+			case Alarm2:
+				return readBit(RV3028_REG_STATUS, STATUS_AF);
+			case Timer:
+				return readBit(RV3028_REG_STATUS, STATUS_TF);
+			case TimeUpdate:
+				return readBit(RV3028_REG_STATUS, STATUS_UF);
+		}
+	}
+
+	void RV3028::clearInterruptFlag(InterruptId_t intId){
+		switch(intId){
+			case Alarm1:
+				clearBit(RV3028_REG_STATUS, STATUS_TF);
+				break;
+			case Alarm2:
+				clearBit(RV3028_REG_STATUS, STATUS_AF);
+				break;
+			case Timer:
+				clearBit(RV3028_REG_STATUS, STATUS_TF);
+				break;
+			case TimeUpdate:
+				clearBit(RV3028_REG_STATUS, STATUS_UF);
+				break;
+		}
+	}
+
+	void RV3028::setTrickleCharge(TrickleCharge_t trickCharge){
+		uint8_t EEPROMBackup = readConfigEEPROM_RAMmirror(RV3028_REG_EEPROM_BACKUP);
+		EEPROMBackup &= EEPROMBackup_TCR_CLEAR; //TCR returned to default 3K
+		if(trickCharge == TC_OFF)
+			EEPROMBackup &= ~(1 << EEPROMBackup_TCE_BIT);
+		else
+			EEPROMBackup |=   1 << EEPROMBackup_TCE_BIT;
+		EEPROMBackup |= (uint8_t)trickCharge << EEPROMBackup_TCR_SHIFT;
+		writeConfigEEPROM_RAMmirror(RV3028_REG_EEPROM_BACKUP, EEPROMBackup);
+	}
+
+	bool RV3028::setBackupSwitchover(SwitchOver_t switchOver){
+		bool success = true;
+		uint8_t EEPROMBackup = readConfigEEPROM_RAMmirror(RV3028_REG_EEPROM_BACKUP);
+		if (EEPROMBackup == 0xFF)
+			success = false;
+		EEPROMBackup |= 1 << EEPROMBackup_FEDE_BIT;
+		EEPROMBackup &= EEPROMBackup_BSM_CLEAR;
+		EEPROMBackup |= (uint8_t)switchOver << EEPROMBackup_BSM_SHIFT;
+		if (!writeConfigEEPROM_RAMmirror(RV3028_REG_EEPROM_BACKUP, EEPROMBackup)) 
+			success = false;
+		return success;
+	}
+
+	//Returns HW Id register
+	uint8_t RV3028::reset(void){
+		setBit(RV3028_REG_CTRL2, CTRL2_RESET);
+		return rv3028(RV3028_REG_ID);
+	}
+
+	//Returns the status byte
+	uint8_t RV3028::status(void){
+		return(rv3028(RV3028_REG_STATUS));
+	}
+
+	//Read the status register to clear the current interrupt flags
+	void RV3028::clearInterrupts(void){
+		rv3028(RV3028_REG_STATUS, 0);
+	}
+
+	uint8_t RV3028::bcdToDec(uint8_t bcd) {
+		return (uint8_t)(10 * ((bcd & 0xF0) >> 4) + (bcd & 0x0F));
+	}
+
+	uint8_t RV3028::decToBcd(uint8_t dec) {
+		return (uint8_t)(((dec / 10) << 4) | (dec % 10));
+	}
+
+	// Read register
+	uint8_t RV3028::rv3028(uint8_t reg) {
+		_i2cPort->beginTransmission((uint8_t)adrRV3028);
+		_i2cPort->write(reg);
+		_i2cPort->endTransmission();
+		_i2cPort->requestFrom((uint8_t)adrRV3028, uint8_t(1));
+		return _i2cPort->read();
+	}
+
+	// Write to RTC register
+	bool RV3028::rv3028(uint8_t reg, uint8_t value) {
+		_i2cPort->beginTransmission((uint8_t)adrRV3028);
+		_i2cPort->write(reg);
+		_i2cPort->write(value);
+		if (_i2cPort->endTransmission() != 0)
+			return false; //NACK
+		return true;
+	}
+
+	// Read data from RTC
+	void RV3028::rv3028rd(uint8_t reg, uint8_t len, void *data) {
+		_i2cPort->beginTransmission((uint8_t)adrRV3028);
+		_i2cPort->write(reg);
+		_i2cPort->endTransmission(false);
+		_i2cPort->requestFrom((uint8_t)adrRV3028, len);
+		for (uint8_t i = 0; i < len; i++) ((uint8_t *)data)[i] = (uint8_t)_i2cPort->read();
+	}
+
+	// Write data to RTC
+	void RV3028::rv3028wr(uint8_t reg, uint8_t len, void *data) {
+		_i2cPort->beginTransmission((uint8_t)adrRV3028);
+		_i2cPort->write(reg);
+		for (uint8_t i = 0; i < len; i++) _i2cPort->write(((uint8_t *)data)[i]);
+		_i2cPort->endTransmission(true);
+	}
+
+	bool RV3028::writeConfigEEPROM_RAMmirror(uint8_t eepromaddr, uint8_t val){
+		bool success = waitforEEPROM();
+
+		//Disable auto refresh by writing 1 to EERD control bit in CTRL1 register
+		uint8_t ctrl1 = rv3028(RV3028_REG_CTRL1);
+		ctrl1 |= 1 << CTRL1_EERD;
+		if (!rv3028(RV3028_REG_CTRL1, ctrl1)) success = false;
+		//Write Configuration RAM Register
+		rv3028(eepromaddr, val);
+		//Update EEPROM (All Configuration RAM -> EEPROM)
+		rv3028(RV3028_REG_EEPROM_CMD, EEPROMCMD_First);
+		rv3028(RV3028_REG_EEPROM_CMD, EEPROMCMD_Update);
+		if (!waitforEEPROM()) success = false;
+		//Reenable auto refresh by writing 0 to EERD control bit in CTRL1 register
+		ctrl1 = rv3028(RV3028_REG_CTRL1);
+		if (ctrl1 == 0x00)success = false;
+		ctrl1 &= ~(1 << CTRL1_EERD);
+		rv3028(RV3028_REG_CTRL1, ctrl1);
+		if (!waitforEEPROM()) success = false;
+
+		return success;
+	}
+
+	uint8_t RV3028::readConfigEEPROM_RAMmirror(uint8_t eepromaddr){
+		bool success = waitforEEPROM();
+
+		//Disable auto refresh by writing 1 to EERD control bit in CTRL1 register
+		uint8_t ctrl1 = rv3028(RV3028_REG_CTRL1);
+		ctrl1 |= 1 << CTRL1_EERD;
+		if (!rv3028(RV3028_REG_CTRL1, ctrl1)) success = false;
+		//Read EEPROM Register
+		rv3028(RV3028_REG_EEPROM_ADDR, eepromaddr);
+		rv3028(RV3028_REG_EEPROM_CMD, EEPROMCMD_First);
+		rv3028(RV3028_REG_EEPROM_CMD, EEPROMCMD_ReadSingle);
+		if (!waitforEEPROM()) success = false;
+		uint8_t eepromdata = rv3028(RV3028_REG_EEPROM_DATA);
+		if (!waitforEEPROM()) success = false;
+		//Reenable auto refresh by writing 0 to EERD control bit in CTRL1 register
+		ctrl1 = rv3028(RV3028_REG_CTRL1);
+		if (ctrl1 == 0x00)success = false;
+		ctrl1 &= ~(1 << CTRL1_EERD);
+		rv3028(RV3028_REG_CTRL1, ctrl1);
+
+		if (!success) return 0xFF;
+		return eepromdata;
+	}
+
+	//True if success, false if timeout occured
+	bool RV3028::waitforEEPROM(){
+		unsigned long timeout = millis() + 500;
+		while ((rv3028(RV3028_REG_STATUS) & 1 << STATUS_EEBUSY) && millis() < timeout);
+
+		return millis() < timeout;
+	}
+
+	void RV3028::setBit(uint8_t reg, uint8_t bitNum){
+		uint8_t value = rv3028(reg);
+		value |= (1 << bitNum);
+		rv3028(reg, value);
+	}
+
+	void RV3028::clearBit(uint8_t reg, uint8_t bitNum){
+		uint8_t value = rv3028(reg);
+		value &= ~(1 << bitNum);
+		rv3028(reg, value);
+	}
+
+	bool RV3028::readBit(uint8_t reg, uint8_t bitNum){
+		uint8_t value = rv3028(reg);
+		value &= (1 << bitNum);
+		return value;
+	}
+
+RV3028 RTC;
+
+#endif	// EZTIME_RV3028_ENABLE
