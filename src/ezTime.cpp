@@ -1554,23 +1554,33 @@ namespace ezt {
 #if defined (EZTIME_DS3231_ENABLE) || defined (ARDUINO_M5Stack_Core_ESP32) || defined (ARDUINO_D1_MINI32)
 #include <Wire.h>
 
-	/*!
-	* DS3231 high precision RTC library for Arduino
-	* Based on https: https://github.com/Erriez/ErriezDS3231
-	* Documentation : https://erriez.github.io/ErriezDS3231
-	* MIT License
-	* Copyright (c) 2018 Erriez
-	*/
-
 	// Initialize and detect DS3231 RTC
 	bool DS3231::begin(TwoWire &wirePort /* = Wire */) {
 		_i2cPort = &wirePort;
-		_rtc_status = timeNeedsSync;
-		// Check zero bits in status register
-		if (ds3231(DS3231_REG_STATUS) & 0x70) {
+		ds3231rd(DS3231_REG_CONTROL, 2, &data);
+		// Check zero bits in Status register
+		if (data[1] & 0x70) {	//DS3231_REG_STATUS
+			_rtc_status = timeNotSet;
 			return false;
 		}
-		return true;	//RTC is fine
+		// Clear EOSC bit to enable osc when running on V-BAT
+		data[0] &= ~(1 << DS3231_CTRL_EOSC);
+		return ds3231(DS3231_REG_CONTROL, data[0]);
+	}
+
+	// Read RTC OSF (Oscillator Stop Flag) from status register
+	// and optionally clears the OSF bit
+	timeStatus_t DS3231::timeStatus(bool clearOSF /* = false */) {
+		data[0] = ds3231(DS3231_REG_STATUS);
+		if (data[0] & (1 << DS3231_STAT_OSF)){
+			_rtc_status = timeNotSet;
+		} else {
+			_rtc_status = timeSet;
+		}
+		if (clearOSF) {	// clear OSF if it's set and the caller wants to clear it
+			ds3231(DS3231_REG_STATUS, (data[0] & ~(1 << DS3231_STAT_OSF)));
+		}
+		return _rtc_status; // RTC oscillator was stopped: The date/time data is invalid.
 	}
 
 	// Enable or disable oscillator when running on V-BAT
@@ -1578,46 +1588,30 @@ namespace ezt {
 	//  true: Enable RTC clock when running on V-BAT
 	// false: Stop RTC clock when running on V-BAT. OSF bit will be set
 	// in status register which can be read on next power-on
-	void DS3231::enableOsc(bool enable) {
-		uint8_t controlReg;
-		controlReg = ds3231(DS3231_REG_CONTROL);
+	bool DS3231::enableOsc(bool enable) {
+		data[0] = ds3231(DS3231_REG_CONTROL);
 		if (enable) {
 			// Clear EOSC bit to enable
-			controlReg &= ~(1 << DS3231_CTRL_EOSC);
+			data[0] &= ~(1 << DS3231_CTRL_EOSC);
 		} else {
 			// Set EOSC bit to disable
-			controlReg |= (1 << DS3231_CTRL_EOSC);
+			data[0] |= (1 << DS3231_CTRL_EOSC);
 			_rtc_status = timeNotSet;
 		}
-		ds3231(DS3231_REG_CONTROL, controlReg);
+		return ds3231(DS3231_REG_CONTROL, data[0]);
 	}
-
-	// Read RTC OSF (Oscillator Stop Flag) from status register
-	// and optionally clears the OSF bit
-	timeStatus_t DS3231::timeStatus(bool clearOSF /* = false */) {
-		uint8_t statusReg = ds3231(DS3231_REG_STATUS);
-		bool oscStopped = statusReg & (1 << DS3231_STAT_OSF);  // isolate the osc stop flag
-		if (oscStopped){
-			if (clearOSF) {	// clear OSF if it's set and the caller wants to clear it
-				ds3231(DS3231_REG_STATUS, (statusReg & ~(1 << DS3231_STAT_OSF)));
-			}
-			_rtc_status = timeNotSet;
-		}
-		return _rtc_status; // RTC oscillator was stopped: The date/time data is invalid.
-	}
-
 
 	// Set the RTC to the given time_t value and clear the
 	// OSF in the Control/Status register.
-	void DS3231::setTime(time_t t) {
+	bool DS3231::setTime(time_t t, bool syncCalendar /* = true */) {
 		tmElements_t tm;
 		ezt::breakTime(t, tm);
-		setTime(tm);
+		return setTime(tm);
 	}
 
 	// year can be given as full four digit year or two digts (2010 or 10 for 2010);  
 	// it is converted to years since 1970
-	void DS3231::setTime(const uint8_t hr, const uint8_t min, const uint8_t sec, const uint8_t day, const uint8_t mnth, uint16_t yr) {
+	bool DS3231::setTime(const uint8_t hr, const uint8_t min, const uint8_t sec, const uint8_t day, const uint8_t mnth, uint16_t yr) {
 		tmElements_t tm;
 		if( yr > 99) {
 			yr = yr - 1970;
@@ -1631,12 +1625,12 @@ namespace ezt {
 		tm.Minute = min;
 		tm.Second = sec;
 		ezt::breakTime(ezt::makeTime(tm), tm);
-		setTime(tm);
+		return setTime(tm);
 	}
 
 	// Set the RTC time from a tmElements_t structure and clear the
 	// oscillator stop flag (OSF) in the Control/Status register
-	void DS3231::setTime(tmElements_t &tm) {
+	bool DS3231::setTime(tmElements_t &tm) {
 		data[0] = (decToBcd(tm.Second));
 		data[1] = (decToBcd(tm.Minute));
 		data[2] = (decToBcd(tm.Hour));
@@ -1652,10 +1646,10 @@ namespace ezt {
 		// Write BCD encoded data to RTC registers
 		ds3231wr (DS3231_REG_SECONDS, 7, data);
 		enableOsc(true);
-		// Clear oscillator halt flag
-		timeStatus(true);
 		_rtc_set_time = ezt::makeTime(tm);
 		_rtc_status = timeSet;
+		// Clear oscillator halt flag
+		return (timeStatus(true) == timeSet ? true : false);
 	}
 
 	// Return time and micros RTC time was set 
@@ -1899,87 +1893,112 @@ namespace ezt {
 	}
 
 	// Write to RTC register
-	void DS3231::ds3231(uint8_t reg, uint8_t value) {
+	bool DS3231::ds3231(uint8_t reg, uint8_t value) {
 		_i2cPort->beginTransmission((uint8_t)adrDS3231);
 		_i2cPort->write(reg);
 		_i2cPort->write(value);
-		_i2cPort->endTransmission();
+		return (_i2cPort->endTransmission() == 0);
 	}
 
 	// Read buffer from RTC
-	void DS3231::ds3231rd(uint8_t reg, uint8_t len, void *data) {
+	bool DS3231::ds3231rd(uint8_t reg, uint8_t len, void *data) {
 		_i2cPort->beginTransmission((uint8_t)adrDS3231);
 		_i2cPort->write(reg);
 		_i2cPort->endTransmission(false);
 		_i2cPort->requestFrom((uint8_t)adrDS3231, len);
 		for (uint8_t i = 0; i < len; i++) ((uint8_t *)data)[i] = (uint8_t)_i2cPort->read();
+		return (_i2cPort->endTransmission() == 0);
 	}
 
 	// Write buffer to RTC
-	void DS3231::ds3231wr (uint8_t reg, uint8_t len, void *data) {
+	bool DS3231::ds3231wr (uint8_t reg, uint8_t len, void *data) {
 		_i2cPort->beginTransmission((uint8_t)adrDS3231);
 		_i2cPort->write(reg);
 		for (uint8_t i = 0; i < len; i++) _i2cPort->write(((uint8_t *)data)[i]);
-		_i2cPort->endTransmission(true);
+		return (_i2cPort->endTransmission() == 0);
 	}
 
 DS3231 RTC;
 
-//#endif	// EZTIME_DS3231_ENABLE
-
-#elif defined (EZTIME_RV3028_ENABLE) || defined (ARDUINO_Piranha)
+#elif defined (EZTIME_RV3028_ENABLE) || defined (ARDUINO_FROG_ESP32)
 #include <Wire.h>
 
 	// Initialize and detect RV-3028-C7 RTC
-	bool RV3028::begin(TwoWire &wirePort /* = Wire */) {
+	bool RV3028::begin(TrickleCharge_t trickCharge /* = TCR_15K */, SwitchOver_t switchOver /* = BS_LEVEL */, TwoWire &wirePort /* = Wire */) {
 		_i2cPort = &wirePort;
-		_rtc_status = timeNeedsSync;
 		_alarm_mode = A2_DDHHMM;
 		uint8_t setting = rv3028(RV3028_REG_CTRL2);
 		// Reads RESET bit in CTRL2 register
 		if (setting & (1 << CTRL2_RESET)){
 			_rtc_status = timeNotSet;
 			return false;	//RTC not detected
-		} else if (setting & (1 << CTRL2_12_24)){
-			_rtc_status = timeNotSet;
+		}
+		if (setting & (1 << CTRL2_12_24)){
 			setting &= ~(1 << CTRL2_12_24);   //Clear 12/24 bit
 			rv3028(RV3028_REG_CTRL2, setting);
 			delay(1);
 		}
 		setBit(RV3028_REG_CTRL1, CTRL1_WADA); //Alarm on Date
-		setBackupSwitchover();
+		setTrickleCharge(trickCharge);
+		setBackupSwitchover(switchOver);
 		return true;
 	}
 
 	// Read RTC PORF (Power On Reset Flag) and optionally clears it
-	timeStatus_t RV3028::timeStatus(bool clearPORF /* = false */) {
+	timeStatus_t RV3028::timeStatus(bool clearPORFandBSF /* = false */) {
 		uint8_t statusReg = rv3028(RV3028_REG_STATUS);
 		if (statusReg & (1 << STATUS_PORF)){
 			// RTC was POR: The date/time data is invalid.
 			_rtc_status = timeNotSet;
-			if (clearPORF)
-				rv3028(RV3028_REG_STATUS, (statusReg & ~(1 << STATUS_PORF)));
+			Serial.println("PORF = 1");
+		} else {
+			if(statusReg & (1 << STATUS_BSF)){
+				_rtc_status = timeSet;
+				Serial.println("PORF = 0 BSF = 1");
+			} else {
+				_rtc_status = timeNotSet;
+				Serial.println("PORF = 0 BSF = 0");
+			}
+		}
+		if (clearPORFandBSF){
+			statusReg &= ~(1 << STATUS_PORF);
+			statusReg &= ~(1 << STATUS_BSF);
+			rv3028(RV3028_REG_STATUS, statusReg);
 		}
 		return _rtc_status;
 	}
 
 	// Set the RTC to the given time_t value and clear the
 	// PORF in the Status register.
-	void RV3028::setTime(time_t t, bool setEpoch) {
-		if (setEpoch) setUnix(t);
-		tmElements_t tm;
-		ezt::breakTime(t, tm);
-		setTime(tm);
+	bool RV3028::setTime(time_t t, bool syncCalendar /* = true */) {
+		if (t < 946684800) {
+			t = 946684800; // 2000-01-01 00:00:00
+		}
+		bool success = false;
+		data[0] = t;
+		data[1] = t >> 8;
+		data[2] = t >> 16;
+		data[3] = t >> 24;
+		success = rv3028wr(RV3028_REG_UNIX_TIME0, 4, data);
+		if (syncCalendar) {
+			tmElements_t tm;
+			ezt::breakTime(t, tm);
+			success = setTime(tm, false);
+		}
+		return success;
 	}
 
-	// year can be given as full four digit year or two digts (2010 or 10 for 2010);  
-	// it is converted to years since 1970
-	void RV3028::setTime(const uint8_t hr, const uint8_t min, const uint8_t sec, const uint8_t day, const uint8_t mnth, uint16_t yr, bool setEpoch) {
+	// year in 2000-2099 range can be given as full four digit year or two digts (2022 or 22 for 2022);  
+	bool RV3028::setTime(const uint8_t hr, const uint8_t min, const uint8_t sec, const uint8_t day, const uint8_t mnth, uint16_t yr, bool syncEpoch /* = true */) {
+		bool success = false;
 		tmElements_t tm;
-		if( yr > 99) {
-			yr = yr - 1970;
-		} else {
+		if(yr <= 99) {
+			// it is converted to years since 1970
 			yr += 30; 
+		} else if ((yr < 2000) || (yr > 2099)) {
+			return false;
+		} else {
+			yr -= 1970;
 		}
 		tm.Year = yr;
 		tm.Month = mnth;
@@ -1987,45 +2006,55 @@ DS3231 RTC;
 		tm.Hour = hr;
 		tm.Minute = min;
 		tm.Second = sec;
+		if ((tm.Second > 59) || 
+			(tm.Minute > 59) || (tm.Hour > 23)  ||
+			(tm.Wday < 1)    || (tm.Wday > 7)   ||        
+			(tm.Day < 1)     || (tm.Day > 31)   ||
+			(tm.Month < 1)   || (tm.Month > 12) ||
+			(tm.Year < 30)   || (tm.Year > 129)) {
+			return success;
+		}
 		time_t t = ezt::makeTime(tm);
-		if (setEpoch) setUnix(t);
-		ezt::breakTime(t, tm);
-		setTime(tm);
+		if(syncEpoch){
+			success = setTime(t);
+		} else {
+			ezt::breakTime(t, tm);
+			success = setTime(tm, false);
+		}
+		return success;
 	}
-
-	// _time[TIME_SECONDS] = decToBcd(sec);
-	// _time[TIME_MINUTES] = decToBcd(min);
-	// _time[TIME_HOURS] = decToBcd(hour);
-	// _time[TIME_WEEKDAY] = decToBcd(weekday);
-	// _time[TIME_DATE] = decToBcd(date);
-	// _time[TIME_MONTH] = decToBcd(month);
-	// _time[TIME_YEAR] = decToBcd(year - 2000);
 
 	// Set the RTC time from a tmElements_t structure and clear the
 	// oscillator stop flag (OSF) in the Control/Status register
-	void RV3028::setTime(tmElements_t &tm, bool setEpoch) {
+	bool RV3028::setTime(tmElements_t &tm, bool syncEpoch /* = true */) {
+		bool success = false;
+		if ((tm.Second > 59) || 
+			(tm.Minute > 59) || (tm.Hour > 23)  ||
+			(tm.Wday < 1)    || (tm.Wday > 7)   ||        
+			(tm.Day < 1)     || (tm.Day > 31)   ||
+			(tm.Month < 1)   || (tm.Month > 12) ||
+			(tm.Year < 30)   || (tm.Year > 129))
+			return success;
 		data[0] = (decToBcd(tm.Second));
 		data[1] = (decToBcd(tm.Minute));
 		data[2] = (decToBcd(tm.Hour));
-		data[3] = tm.Wday - 1;
-		// if tm.Sunday = 1 then RTC.Sunday is 7
-		if(data[3] == 0) data[3] = 7;
+		// tm.Sunday = 1 is RTC.Sunday = 0
+		data[3] = (decToBcd(tm.Wday - 1));
 		data[4] = (decToBcd(tm.Day));
 		data[5] = (decToBcd(tm.Month));
 		data[6] = (decToBcd(tmYearToY2k(tm.Year)));
 
 		_rtc_set_time = ezt::makeTime(tm);
-		if (setEpoch) setUnix(_rtc_set_time);
 		// Get the nearest micros when tm.Second is writen to RTC
-		// Next second mark should be 500us later
 		_rtc_set_micros = micros();
-
 		// Write BCD encoded data to RTC registers
-		rv3028wr(RV3028_REG_SECONDS, 7, data);
-
-		// Clear PORF
-		timeStatus(true);
+		success = rv3028wr(RV3028_REG_SECONDS, 7, data);
+		// set Unix epoch ONLY if required
+		if (syncEpoch) success = setTime(_rtc_set_time, false);
 		_rtc_status = timeSet;
+		// Clear PORF
+		success &= (timeStatus(true) == timeSet ? true : false);
+		return success;
 	}
 
 	// Return time and micros RTC time was set 
@@ -2037,17 +2066,15 @@ DS3231 RTC;
 	// Read the current time from the RTC
 	// and return it as a time_t value. 
 	// Returns false if an invalid date/time format was read from the RTC.
-	time_t RV3028::now(bool getEpoch) {
-		if (getEpoch) {
-			return nowUnix();
-		} else {
+	time_t RV3028::now(bool getCalendar /* = false */) {
+		if (getCalendar) {
 			tmElements_t tm;
 			rv3028rd(RV3028_REG_SECONDS, 7, &data);
 			tm.Second = bcdToDec(data[0]);
 			tm.Minute = bcdToDec(data[1]);
 			tm.Hour   = bcdToDec(data[2] & 0x3f);    // assumes 24hr clock
-			tm.Wday   = 1 + data[3];
-			if(tm.Wday == 8) tm.Wday = 1;
+			// RTC.Sunday = 0 is tm.Sunday = 1
+			tm.Wday   = data[3] + 1;
 			tm.Day    = bcdToDec(data[4]);
 			tm.Month  = bcdToDec(data[5] & 0x1f);	// do not use the Century bit
 			tm.Year   = y2kYearToTm(bcdToDec(data[6])); // +30
@@ -2056,28 +2083,14 @@ DS3231 RTC;
 				(tm.Wday < 1)    || (tm.Wday > 7)   ||        
 				(tm.Day < 1)     || (tm.Day > 31)   ||
 				(tm.Month < 1)   || (tm.Month > 12) ||
-				(tm.Year < 30)   || (tm.Year > 129)) {
-				// Invalid date/time read from RTC: Clear date time
-				memset(&tm, 0x00, sizeof(tmElements_t));
+				(tm.Year < 30)   || (tm.Year > 129))
 				return 0;
-			}
-			return( ezt::makeTime(tm) );
+			return (ezt::makeTime(tm));
+		} else {
+			rv3028rd(RV3028_REG_UNIX_TIME0, 4, data);
+			return (time_t)((uint32_t)data[3] << 24) | ((uint32_t)data[2] << 16) | ((uint32_t)data[1] << 8) | data[0];
 		}
-	}
-
-	//Note: Real Time and UNIX Time are INDEPENDENT!
-	void RV3028::setUnix(time_t t){
-		data[0] = t;
-		data[1] = t >> 8;
-		data[2] = t >> 16;
-		data[3] = t >> 24;
-		rv3028wr(RV3028_REG_UNIX_TIME0, 4, data);
-	}
-
-	//Note: Real Time and UNIX Time are INDEPENDENT!
-	time_t RV3028::nowUnix(){
-		rv3028rd(RV3028_REG_UNIX_TIME0, 4, data);
-		return (time_t)((uint32_t)data[3] << 24) | ((uint32_t)data[2] << 16) | ((uint32_t)data[1] << 8) | data[0];
+		return 0;
 	}
 
 	bool RV3028::setAlarm(time_t t) {
@@ -2126,21 +2139,6 @@ DS3231 RTC;
 			return false;
 		}
 	}
-
-	// time_t makeTime(const uint8_t hour, const uint8_t minute, const uint8_t second, const uint8_t day, const uint8_t month, const uint16_t year) {
-	// 	tmElements_t tm;
-	// 	tm.Hour = hour;
-	// 	tm.Minute = minute;
-	// 	tm.Second = second;
-	// 	tm.Day = day;
-	// 	tm.Month = month;
-	// 	if (year > 68) {			// time_t cannot reach beyond 68 + 1970 anyway, so if bigger user means actual years
-	// 		tm.Year = year - 1970;
-	// 	} else {
-	// 		tm.Year = year;
-	// 	}
-	// 	return makeTime(tm);
-	// }
 
 	void RV3028::setAlarm1(Alarm1_t alarmType, uint8_t dayDate, uint8_t hour, uint8_t min, uint8_t sec, bool enableClockOut /* false */) {
 		rv3028rd(RV3028_REG_SECONDS, 7, &data);
@@ -2497,26 +2495,25 @@ DS3231 RTC;
 		_i2cPort->beginTransmission((uint8_t)adrRV3028);
 		_i2cPort->write(reg);
 		_i2cPort->write(value);
-		if (_i2cPort->endTransmission() != 0)
-			return false; //NACK
-		return true;
+		return (_i2cPort->endTransmission() == 0);
 	}
 
 	// Read data from RTC
-	void RV3028::rv3028rd(uint8_t reg, uint8_t len, void *data) {
+	bool RV3028::rv3028rd(uint8_t reg, uint8_t len, void *data) {
 		_i2cPort->beginTransmission((uint8_t)adrRV3028);
 		_i2cPort->write(reg);
 		_i2cPort->endTransmission(false);
 		_i2cPort->requestFrom((uint8_t)adrRV3028, len);
 		for (uint8_t i = 0; i < len; i++) ((uint8_t *)data)[i] = (uint8_t)_i2cPort->read();
+		return (_i2cPort->endTransmission() == 0);
 	}
 
 	// Write data to RTC
-	void RV3028::rv3028wr(uint8_t reg, uint8_t len, void *data) {
+	bool RV3028::rv3028wr(uint8_t reg, uint8_t len, void *data) {
 		_i2cPort->beginTransmission((uint8_t)adrRV3028);
 		_i2cPort->write(reg);
 		for (uint8_t i = 0; i < len; i++) _i2cPort->write(((uint8_t *)data)[i]);
-		_i2cPort->endTransmission(true);
+		return (_i2cPort->endTransmission() == 0);
 	}
 
 	bool RV3028::writeConfigEEPROM_RAMmirror(uint8_t eepromaddr, uint8_t val){

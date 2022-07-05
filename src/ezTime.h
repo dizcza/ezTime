@@ -370,13 +370,6 @@ namespace ezt {
 #define weeksToTime_t   ((W)) ( (W) * SECS_PER_WEEK) 
 
 
-/*!
- * DS3231 high precision RTC library for Arduino
- * Based on https: https://github.com/Erriez/ErriezDS3231
- * Documentation : https://erriez.github.io/ErriezDS3231
- * MIT License
- * Copyright (c) 2018 Erriez
- */
 #if defined (EZTIME_DS3231_ENABLE) || defined (ARDUINO_M5Stack_Core_ESP32) || defined (ARDUINO_D1_MINI32)
 	#include <Wire.h>
 	#include <stdint.h>
@@ -471,12 +464,12 @@ namespace ezt {
 
 		public:
 			static bool begin(TwoWire &wirePort = Wire);
-			static void enableOsc(bool enable = true);
 			static timeStatus_t timeStatus(bool clearOSF = false);
+			static bool enableOsc(bool enable = true);
 		
-			static void setTime(time_t t);
-			static void setTime(const uint8_t hr, const uint8_t min, const uint8_t sec, const uint8_t day, const uint8_t month, const uint16_t yr);
-			static void setTime(tmElements_t &tm);
+			static bool setTime(time_t t, bool syncCalendar = true);
+			static bool setTime(const uint8_t hr, const uint8_t min, const uint8_t sec, const uint8_t day, const uint8_t month, const uint16_t yr);
+			static bool setTime(tmElements_t &tm);
 			static time_t now();
 			static time_t getSetTime(uint64_t &micros);	//Returns the time when RTC time was set
 
@@ -499,16 +492,16 @@ namespace ezt {
 			static uint8_t bcdToDec(uint8_t bcd);
 			static uint8_t decToBcd(uint8_t dec);
 			static uint8_t ds3231(uint8_t reg);
-			static void ds3231(uint8_t reg, uint8_t value);
-			static void ds3231rd(uint8_t reg, uint8_t len, void *data);
-			static void ds3231wr(uint8_t reg, uint8_t len, void *data);
+			static bool ds3231(uint8_t reg, uint8_t value);
+			static bool ds3231rd(uint8_t reg, uint8_t len, void *data);
+			static bool ds3231wr(uint8_t reg, uint8_t len, void *data);
 	};
 
 	extern DS3231 RTC;
 
 //#endif	// EZTIME_DS3231_ENABLE 
 
-#elif defined  (EZTIME_RV3028_ENABLE) || defined (ARDUINO_Piranha)
+#elif defined  (EZTIME_RV3028_ENABLE) || defined (ARDUINO_FROG_ESP32)
 	#include <Wire.h>
 
 	#define EZTIME_RV3028_ENABLE
@@ -716,22 +709,22 @@ namespace ezt {
 	class RV3028 {
 
 		public:
-			static bool begin(TwoWire &wirePort = Wire);
+			static bool begin(TrickleCharge_t trickCharge = TCR_15K, SwitchOver_t switchOver = BS_LEVEL, TwoWire &wirePort = Wire);
 			static timeStatus_t timeStatus(bool clearPORF = false);
-			static void setTime(time_t t, bool setEpoch = false);
-			static void setTime(const uint8_t hr, const uint8_t min, const uint8_t sec, const uint8_t day, const uint8_t month, const uint16_t yr, bool setLocal = true);
-			static void setTime(tmElements_t &tm, bool setLocal = true);
-			static time_t now(bool getEpoch = false);
+			
+			static bool setTime(time_t t, bool syncCalendar = true);
+			static bool setTime(const uint8_t hr, const uint8_t min, const uint8_t sec, const uint8_t day, const uint8_t month, const uint16_t yr, bool syncEpoch = true);
+			static bool setTime(tmElements_t &tm, bool syncEpoch = true);
+			static time_t now(bool getCalendar = false);
 			static time_t getSetTime(uint64_t &micros);	//Returns the time when RTC time was set
-			static void setUnix(time_t t);	//Set the UNIX Time (Real Time and UNIX Time are INDEPENDENT!)
-			static time_t nowUnix();
 
+			static bool setAlarm(time_t t);
+			static bool setAlarm(tmElements_t &tm);
 			//DS3231 compatible alarm types
 			static void setAlarm1(Alarm1_t alarmType, uint8_t dayDate, const uint8_t hour, const uint8_t min, const uint8_t sec, const bool enableClockOut = false);
 			static void setAlarm2(Alarm2_t alarmType, uint8_t dayDate, const uint8_t hour, const uint8_t min, const bool enableClockOut = false);
 
-			static bool setAlarm(time_t t);
-			static bool setAlarm(tmElements_t &tm);
+
 			static bool isMonthYearMatch();
 			static void setAlarm(uint8_t mode, uint8_t dayDate, const uint8_t hour, const uint8_t min, bool dayNotDate = false, bool enableClockOut = false);
 			static void setUpdate(TimeUpdate_t update = EverySecond, bool enableClockOut = false);
@@ -764,8 +757,8 @@ namespace ezt {
 			static uint8_t decToBcd(uint8_t dec);
 			static uint8_t rv3028(uint8_t reg);
 			static bool rv3028(uint8_t reg, uint8_t value);
-			static void rv3028rd(uint8_t reg, uint8_t len, void *data);
-			static void rv3028wr(uint8_t reg, uint8_t len, void *data);
+			static bool rv3028rd(uint8_t reg, uint8_t len, void *data);
+			static bool rv3028wr(uint8_t reg, uint8_t len, void *data);
 
 			static void setBit(uint8_t reg, uint8_t bitNum);
 			static void clearBit(uint8_t reg, uint8_t bitNum);
