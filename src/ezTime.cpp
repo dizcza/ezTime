@@ -1920,7 +1920,7 @@ namespace ezt {
 
 DS3231 RTC;
 
-#elif defined (EZTIME_RV3028_ENABLE) || defined (ARDUINO_FROG_ESP32)
+#elif defined (EZTIME_RV3028_ENABLE) || defined (ARDUINO_FROG_ESP32)  || defined (ARDUINO_WESP32)
 #include <Wire.h>
 
 	// Initialize and detect RV-3028-C7 RTC
@@ -1950,14 +1950,14 @@ DS3231 RTC;
 		if (statusReg & (1 << STATUS_PORF)){
 			// RTC was POR: The date/time data is invalid.
 			_rtc_status = timeNotSet;
-			Serial.println("PORF = 1");
+			//Serial.println("PORF = 1");
 		} else {
 			if(statusReg & (1 << STATUS_BSF)){
 				_rtc_status = timeSet;
-				Serial.println("PORF = 0 BSF = 1");
+				//Serial.println("PORF = 0 BSF = 1");
 			} else {
 				_rtc_status = timeNotSet;
-				Serial.println("PORF = 0 BSF = 0");
+				//Serial.println("PORF = 0 BSF = 0");
 			}
 		}
 		if (clearPORFandBSF){
@@ -2169,8 +2169,6 @@ DS3231 RTC;
 				}
 			}
 		}
-		time_t alarmTime = makeTime(tm.Hour, tm.Minute, tm.Second, tm.Day, tm.Month, tm.Year);
-//		alarmTime = makeTime(hour, min, sec, bcdToDec(data[4]) + daysTillAlarm, bcdToDec(data[5]), y2kYearToTm(bcdToDec(data[6])));
 		uint8_t clockBit;
 		InterruptId_t intId;
 		_alarm_mode = (uint8_t)alarmType;
@@ -2293,7 +2291,7 @@ DS3231 RTC;
 			clearBit(RV3028_REG_INT_MASK, IMT_MASK_CUIE);
 	}
 
-	void RV3028::setTimer(uint16_t timerValue, uint16_t timerFrequency /* 1 */, bool timerRepeat /* false */, bool startTimer /* true */, bool setInterrupt /* true */, bool enableClockOutput /* false */){
+	void RV3028::setTimer(uint16_t timerValue, uint16_t timerFrequency /* 1 */, bool timerRepeat /* false */, bool startTimer /* true */, bool setInterrupt /* true */, bool enableClockOut /* false */){
 		disableTimer();
 		disableInterrupt(Timer);
 		clearInterruptFlag(Timer);
@@ -2414,6 +2412,7 @@ DS3231 RTC;
 			case TimeUpdate:
 				return readBit(RV3028_REG_STATUS, STATUS_UF);
 		}
+		return true;
 	}
 
 	void RV3028::clearInterruptFlag(InterruptId_t intId){

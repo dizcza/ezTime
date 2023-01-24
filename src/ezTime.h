@@ -501,7 +501,7 @@ namespace ezt {
 
 //#endif	// EZTIME_DS3231_ENABLE 
 
-#elif defined  (EZTIME_RV3028_ENABLE) || defined (ARDUINO_FROG_ESP32)
+#elif defined  (EZTIME_RV3028_ENABLE) || defined (ARDUINO_FROG_ESP32)  || defined (ARDUINO_WESP32)
 	#include <Wire.h>
 
 	#define EZTIME_RV3028_ENABLE
