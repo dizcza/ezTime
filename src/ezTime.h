@@ -483,7 +483,7 @@ namespace ezt {
 
 			static void setAlarm1(Alarm1_t alarmType, uint8_t dayDate, const uint8_t hr, const uint8_t min, const uint8_t sec);
 			static void setAlarm2(Alarm2_t alarmType, uint8_t dayDate, const uint8_t hr, const uint8_t min);
-			//static void enableInterrupt(AlarmId_t alarmId, bool enable);
+
 			static void enableInterrupt(AlarmId_t intId);
 			static void disableInterrupt(AlarmId_t intId);
 			static bool getAlarmFlag(AlarmId_t alarmId);
@@ -499,7 +499,6 @@ namespace ezt {
 
 	extern DS3231 RTC;
 
-//#endif	// EZTIME_DS3231_ENABLE 
 
 #elif defined  (EZTIME_RV3028_ENABLE) || defined (ARDUINO_FROG_ESP32)  || defined (ARDUINO_WESP32)
 	#include <Wire.h>
@@ -771,8 +770,142 @@ namespace ezt {
 
 	extern RV3028 RTC;
 
-#endif	// EZTIME_RV3028_ENABLE
+#elif defined  (EZTIME_BM8563_ENABLE) || defined (ARDUINO_FROG_ESP32)
+	#include <Wire.h>
+
+	#define EZTIME_BM8563_ENABLE
+
+	const uint8_t adrBM8563 = 0x51;
+
+	//! REG MAP
+	#define BM8563_REG_STAT1       (0x00)
+	#define BM8563_REG_STAT2       (0x01)
+	#define BM8563_REG_SEC         (0x02)
+	#define BM8563_REG_MIN         (0x03)
+	#define BM8563_REG_HR          (0x04)
+	#define BM8563_REG_DAY         (0x05)
+	#define BM8563_REG_WEEKDAY     (0x06)
+	#define BM8563_REG_MONTH       (0x07)
+	#define BM8563_REG_YEAR        (0x08)
+	#define BM8563_REG_ALRM_MIN    (0x09)
+	#define BM8563_REG_SQW         (0x0D)
+	#define BM8563_REG_TIMER1      (0x0E)
+	#define BM8563_REG_TIMER2      (0x0F)
+
+	#define BM8563_VOLT_LOW_MASK   (0x80)
+	#define BM8563_MIN_MASK    (0x7F)
+	#define BM8563_HOUR_MASK       (0x3F)
+	#define BM8563_WEEKDAY_MASK    (0x07)
+	#define BM8563_CENTURY_MASK    (0x80)
+	#define BM8563_DAY_MASK        (0x3F)
+	#define BM8563_MONTH_MASK      (0x1F)
+	#define BM8563_TIMER_CTL_MASK  (0x03)
+
+	#define BM8563_ALARM_AF        (0x08)
+	#define BM8563_TIMER_TF        (0x04)
+	#define BM8563_ALARM_AIE       (0x02)
+	#define BM8563_TIMER_TIE       (0x01)
+	#define BM8563_TIMER_TE        (0x80)
+	#define BM8563_TIMER_TD10      (0x03)
+
+	#define BM8563_NO_ALARM        (0xFF)
+	#define BM8563_ALARM_ENABLE    (0x80)
+	#define BM8563_CLK_ENABLE      (0x80)
+
+	//Bits in Status Register
+	#define STATUS2_TI_TP	4
+	#define STATUS2_AF		3
+	#define STATUS2_TF		2
+	#define STATUS2_AIE		1
+	#define STATUS2_TIE		0
+
+	typedef enum {
+		Alarm1 = 1,
+		Alarm2 = 2,
+		Timer  = 3,
+	} InterruptId_t;
+
+	typedef enum {
+		A2_DDHHMM = 0, //When date, hours and minutes match (once per date)
+		A2_DDHH   = 1, //When date and hours match (once per month @hour)
+		A2_DDMM   = 2, //When date and minutes match (once per month @minute)
+		A2_DD     = 3, //When date match (once per month)
+		A2_HHMM   = 4, //When hours and minutes match (once per day)
+		A2_HH     = 5, //When hours match (once per day)
+		A2_MM     = 6, //When minutes match (once per hour)
+		A2_OFF    = 7, //Alarm disabled - Default value
+		A2_EM     = 8, //Alarm every minute
+		A2_ES     = 9, //Alarm every second
+		A2_WDHHMM = 10, //When weekday, hours and minutes match (once per date)
+		A2_WDHH   = 11, //When weekday and hours match (once per month @hour)
+		A2_WDMM   = 12, //When weekday and minutes match (once per month @minute)
+		A2_WD     = 13, //When weekday match (once per month)
+	} Alarm2_t;
+
+	typedef enum {
+		EverySecond = 0,
+		EveryMinute = 1,
+	} TimeUpdate_t;
+
+	typedef enum {
+		SquareWave32768Hz
+		SquareWave1024Hz
+		SquareWave32Hz
+		SquareWave1Hz
+	} SquareWave_t 
+
+	class BM8563 {
+
+		public:
+			static bool begin(TwoWire &wirePort = Wire);
+			static timeStatus_t timeStatus(bool clearVL = false);
+			
+			static bool setTime(time_t t, bool syncCalendar = true);
+			static bool setTime(const uint8_t hr, const uint8_t min, const uint8_t sec, const uint8_t day, const uint8_t month, const uint16_t yr, bool syncEpoch = true);
+			static bool setTime(tmElements_t &tm, bool syncEpoch = true);
+			static time_t now(bool getCalendar = false);
+			static time_t getSetTime(uint64_t &micros);	//Returns the time when RTC time was set
+
+			static void setSquareWave(SquareWave_t squareWave, bool enableClockOut = false);
+			static void enableClockOut(bool enable = true);
+
+			static bool setAlarm(time_t t);
+			static bool setAlarm(tmElements_t &tm);
+			//DS3231 compatible alarm types
+			static void setAlarm2(Alarm2_t alarmType, uint8_t dayDate, const uint8_t hour, const uint8_t min, const bool enableClockOut = false);
+	
+			static void setTimer(uint16_t timerValue, uint16_t timerFrequency = 1, bool setInterrupt = true);
+			static void enableTimer();
+			static void disableTimer();
+			
+			static void enableInterrupt(InterruptId_t intId);
+			static void disableInterrupt(InterruptId_t intId);
+			static bool readInterruptFlag(InterruptId_t intId);
+			static void clearInterruptFlag(InterruptId_t intId);
+			static void clearInterrupts();
+
+			static uint8_t status(); //Returns the status byte
+
+		private:
+			static uint8_t bcdToDec(uint8_t bcd);
+			static uint8_t decToBcd(uint8_t dec);
+			static uint8_t bm8563(uint8_t reg);
+			static bool bm8563(uint8_t reg, uint8_t value);
+			static bool bm8563rd(uint8_t reg, uint8_t len, void *data);
+			static bool bm8563wr(uint8_t reg, uint8_t len, void *data);
+
+			static void setBit(uint8_t reg, uint8_t bitNum);
+			static void clearBit(uint8_t reg, uint8_t bitNum);
+			static bool readBit(uint8_t reg, uint8_t bitNum);
+
+	};
+
+	extern BM8563 RTC;
+
+#endif
 
 } // extern "C++"
 #endif // __cplusplus
 #endif //_EZTIME_H_
+
+

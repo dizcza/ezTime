@@ -81,7 +81,7 @@ namespace {
 		uint16_t _ntp_interval = NTP_INTERVAL;
 		String _ntp_server = NTP_SERVER;
 	#endif
-	#if defined (EZTIME_DS3231_ENABLE) || defined (EZTIME_RV3028_ENABLE)
+	#if defined (EZTIME_DS3231_ENABLE) || defined (EZTIME_RV3028_ENABLE) || defined (EZTIME_BM8563_ENABLE)
 		#define HAS_RTC
 		TwoWire *_i2cPort;
 		timeStatus_t _rtc_status;
@@ -1920,7 +1920,7 @@ namespace ezt {
 
 DS3231 RTC;
 
-#elif defined (EZTIME_RV3028_ENABLE) || defined (ARDUINO_FROG_ESP32)  || defined (ARDUINO_WESP32)
+#elif defined (EZTIME_RV3028_ENABLE) || defined (ARDUINO_WESP32)	//K46v1
 #include <Wire.h>
 
 	// Initialize and detect RV-3028-C7 RTC
@@ -2590,4 +2590,416 @@ DS3231 RTC;
 
 RV3028 RTC;
 
-#endif	// EZTIME_RV3028_ENABLE
+#elif defined (EZTIME_BM8563_ENABLE) || defined (ARDUINO_FROG_ESP32)	//K46v4
+#include <Wire.h>
+
+	// Initialize and detect BM8563 RTC
+	bool BM8563::begin(TwoWire &wirePort /* = Wire */) {
+		_i2cPort = &wirePort;
+		_i2cPort->beginTransmission(adrBM8563);
+		return (_i2cPort->endTransmission() ==  0);
+	}
+
+	// Read RTC VolageLow Flag and optionally clears it
+	timeStatus_t BM8563::timeStatus(bool clearVL /* = false */) {
+		uint8_t vldReg = bm8563rd(BM8563_REG_SEC);
+		vldReg & BM8563_VOLT_LOW_MASK)? _rtc_status = timeNotSet : _rtc_status = timeSet;
+		if (clearМД){
+			vldReg &= ~(BM8563_VOLT_LOW_MASK);
+			bm8563(BM8563_REG_SEC, vldReg);
+		}
+		return _rtc_status;
+	}
+
+	// Set the RTC to the given time_t value and clear the
+	// OSF in the Control/Status register.
+	// Set the RTC to the given time_t value and clear the
+	// PORF in the Status register.
+	bool BM8563::setTime(time_t t, bool syncCalendar /* = true */) {
+		tmElements_t tm;
+		if (t < 946684800) {
+			t = 946684800; // 2000-01-01 00:00:00
+		}
+		ezt::breakTime(t, tm);
+		return setTime(tm);
+	}
+
+	// year in 2000-2099 range can be given as full four digit year or two digts (2022 or 22 for 2022);
+	bool BM8563::setTime(const uint8_t hr, const uint8_t min, const uint8_t sec, const uint8_t day, const uint8_t mnth, uint16_t yr, bool syncEpoch /* = true */) {
+		tmElements_t tm;
+		if( yr > 99) {
+			yr = yr - 1970;
+		} else {
+			yr += 30; 
+		}
+		// if(yr <= 99) {
+		// 	// it is converted to years since 1970
+		// 	yr += 30; 
+		// } else if ((yr < 2000) || (yr > 2099)) {
+		// 	return false;
+		// } else {
+		// 	yr -= 1970;
+		// }
+		tm.Year = yr;
+		tm.Month = mnth;
+		tm.Day = day;
+		tm.Hour = hr;
+		tm.Minute = min;
+		tm.Second = sec;
+		if ((tm.Second > 59) || 
+			(tm.Minute > 59) || (tm.Hour > 23)  ||        
+			(tm.Day < 1)     || (tm.Day > 31)   ||
+			(tm.Month < 1)   || (tm.Month > 12) ||
+			(tm.Year < 30)   || (tm.Year > 129)) {
+			return false;
+		}
+		ezt::breakTime(ezt::makeTime(tm), tm);
+		return setTime(tm);
+	}
+
+	// Set the RTC time from a tmElements_t structure and clear the
+	// oscillator stop flag (OSF) in the Control/Status register
+	bool BM8563::setTime(tmElements_t &tm) {
+		data[0] = (decToBcd(tm.Second)) & (~BM8563_VOL_LOW_MASK);
+		data[1] = (decToBcd(tm.Minute));
+		data[2] = (decToBcd(tm.Hour));
+		data[3] = (decToBcd(tm.Day));
+		data[4] = tm.Wday - 1;
+		data[5] = (decToBcd(tm.Month));
+		data[6] = (decToBcd(tm.Year % 100));
+		if ((2000 % year) == 2000) {
+			data[5] &= (~BM8563_CENTURY_MASK);
+		} else {
+			data[5] |= BM8563_CENTURY_MASK;
+		}
+		// Get the nearest micros when tm.Second is writen to RTC
+		// Next second mark should be 500us later
+		_rtc_set_micros = micros();
+		// Write BCD encoded data to RTC registers
+		bm8563wr(BM8563_REG_SEC, 7, data);
+		enableOsc(true);
+		_rtc_set_time = ezt::makeTime(tm);
+		_rtc_status = timeSet;
+		// Clear oscillator halt flag
+		return (timeStatus(true) == timeSet ? true : false);
+	}
+
+	// Return time and micros RTC time was set 
+	time_t BM8563::getSetTime(uint64_t &micros) {
+		micros = _rtc_set_micros;
+		return _rtc_set_time;
+	}
+
+	// Read the current time from the RTC
+	// and return it as a time_t value. 
+	// Returns false if an invalid date/time format was read from the RTC.
+	time_t BM8563::now(bool getCalendar /* = false */) {
+		tmElements_t tm;
+		uint16_t year;
+		uint8_t cetury = 0;
+		bm8563rd(BM8563_REG_SEC, 7, data);
+		_voltageLow = (data[0] & BM8563_VOL_LOW_MASK);
+		tm.Second = bcdToDec(data[0] & (~BM8563_VOL_LOW_MASK));
+		tm.Minute = bcdToDec(data[1] & BM8563_MIN_MASK);
+		tm.Hour   = bcdToDec(data[2] & BM8563_HOUR_MASK);
+		tm.Day    = bcdToDec(data[3] & BM8563_DAY_MASK);
+		tm.Wday   = bcdToDec(data[4] & BM8563_WEEKDAY_MASK);
+		cetury    = data[5] & BM8563_CENTURY_MASK;
+		tm.Month  = bcdToDec(data[5] & BM8563_MONTH_MASK);
+		// tm.Year = _bcd_to_dec(data[6]);
+		// //cetury :  0 = 1900 , 1 = 2000
+		// tm.Year = cetury ?  1900 + tm.Year : 2000 + tm.Year;
+		tm.Year   = y2kYearToTm(bcdToDec(data[6])); // +30
+		if ((tm.Second > 59) || 
+			(tm.Minute > 59) || (tm.Hour > 23)  ||
+			(tm.Wday < 1)    || (tm.Wday > 7)   ||        
+			(tm.Day < 1)     || (tm.Day > 31)   ||
+			(tm.Month < 1)   || (tm.Month > 12) ||
+			(tm.Year < 30)   || (tm.Year > 129))
+			return 0;
+		return (ezt::makeTime(tm));
+	}
+
+	void BM8563::setAlarm2(Alarm2_t alarmType, uint8_t dayDate, uint8_t hour, uint8_t min, bool enableClockOut /* false */)
+	{
+		data[0] = decToBcd(constrain(min, 0, 59));
+		data[1] = decToBcd(constrain(hour, 0, 23));
+		data[2] = decToBcd(constrain(dayDate, 1, 31));
+		data[3] = decToBcd(constrain(dayDate, 0, 6));
+		switch (alarmType){
+			case A2_DDHHMM: //When date, hours and minutes match (once per date)
+				data[0] &= ~BM8563_ALARM_ENABLE;
+				data[1] &= ~BM8563_ALARM_ENABLE;
+				data[2] &= ~BM8563_ALARM_ENABLE;
+				data[3] !=  BM8563_ALARM_ENABLE;
+				break;
+			case A2_DDHH:   //When date and hours match (once per month @hour)
+				data[0] !=  BM8563_ALARM_ENABLE;
+				data[1] &= ~BM8563_ALARM_ENABLE;
+				data[2] &= ~BM8563_ALARM_ENABLE;
+				data[3] !=  BM8563_ALARM_ENABLE;
+				break;
+			case A2_DDMM:   //When date and minutes match (once per month @minute)
+				data[0] &= ~BM8563_ALARM_ENABLE;
+				data[1] !=  BM8563_ALARM_ENABLE;
+				data[2] &= ~BM8563_ALARM_ENABLE;
+				data[3] !=  BM8563_ALARM_ENABLE;
+				break;
+			case A2_DD:     //When date match (once per month)
+				data[0] !=  BM8563_ALARM_ENABLE;
+				data[1] !=  BM8563_ALARM_ENABLE;
+				data[2] &= ~BM8563_ALARM_ENABLE;
+				data[3] !=  BM8563_ALARM_ENABLE;
+				break;
+			case A2_HHMM:   //When hours and minutes match (once per day)
+				data[0] &= ~BM8563_ALARM_ENABLE;
+				data[1] &= ~BM8563_ALARM_ENABLE;
+				data[2] &= ~BM8563_ALARM_ENABLE;
+				data[3] !=  BM8563_ALARM_ENABLE;
+				break;
+			case A2_HH:     //When hours match (once per day)
+				data[0] &= ~BM8563_ALARM_ENABLE;
+				data[1] &= ~BM8563_ALARM_ENABLE;
+				data[2] &= ~BM8563_ALARM_ENABLE;
+				data[3] !=  BM8563_ALARM_ENABLE;
+				break;
+			case A2_MM:     //When minutes match (once per hour)
+				data[0] &= ~BM8563_ALARM_ENABLE;
+				data[1] &= ~BM8563_ALARM_ENABLE;
+				data[2] &= ~BM8563_ALARM_ENABLE;
+				data[3] !=  BM8563_ALARM_ENABLE;
+				break;
+			case A2_OFF:    //Alarm disabled - Default value
+				data[0] != BM8563_ALARM_ENABLE;
+				data[1] != BM8563_ALARM_ENABLE;
+				data[2] != BM8563_ALARM_ENABLE;
+				data[3] != BM8563_ALARM_ENABLE;
+				break;
+			case A2_EM:     //Alarm every minute
+				bm8563rd(BM8563_REG_STAT2, 1, data);
+				data[0] |= 1 << STATUS2_TI_TP;
+				bm8563wr(BM8563_REG_STAT2, 1, data);
+				data[0] = 1;
+				bm8563wr(BM8563_REG_TIMER2, 1, data)
+				bm8563rd(BM8563_REG_TIMER1, 1, data);
+				data[0] |= 0x83;	//TE | 1/60Hz
+				bm8563wr(BM8563_REG_TIMER1, 1, data);
+				data[0] &= ~BM8563_ALARM_ENABLE;
+				data[1] &= ~BM8563_ALARM_ENABLE;
+				data[2] &= ~BM8563_ALARM_ENABLE;
+				data[3] &= ~BM8563_ALARM_ENABLE;
+				break;
+			case A2_ES:     //Alarm every second
+				bm8563rd(BM8563_REG_STAT2, 1, data);
+				data[0] |= 1 << STATUS2_TI_TP;
+				bm8563wr(BM8563_REG_STAT2, 1, data);
+				data[0] = 1;
+				bm8563wr(BM8563_REG_TIMER2, 1, data)
+				bm8563rd(BM8563_REG_TIMER1, 1, data);
+				data[0] |= 0x82;	//TE | 1Hz
+				bm8563wr(BM8563_REG_TIMER1, 1, data);
+				data[0] &= ~BM8563_ALARM_ENABLE;
+				data[1] &= ~BM8563_ALARM_ENABLE;
+				data[2] &= ~BM8563_ALARM_ENABLE;
+				data[3] &= ~BM8563_ALARM_ENABLE;
+				break;
+			case A2_WDHHMM: //When weekday, hours and minutes match (once per week @hour&min)
+				data[0] &= ~BM8563_ALARM_ENABLE;
+				data[1] &= ~BM8563_ALARM_ENABLE;
+				data[2] !=  BM8563_ALARM_ENABLE;
+				data[3] &= ~BM8563_ALARM_ENABLE;
+				break;
+			case A2_WDHH:   //When weekday and hours match (once per week @hour)
+				data[0] !=  BM8563_ALARM_ENABLE;
+				data[1] &= ~BM8563_ALARM_ENABLE;
+				data[2] !=  BM8563_ALARM_ENABLE;
+				data[3] &= ~BM8563_ALARM_ENABLE;
+				break;
+			case A2_WDMM:   //When weekday and minutes match (once per week @minute)
+				data[0] &= ~BM8563_ALARM_ENABLE;
+				data[1] !=  BM8563_ALARM_ENABLE;
+				data[2] !=  BM8563_ALARM_ENABLE;
+				data[3] &= ~BM8563_ALARM_ENABLE;
+				break;
+			case A2_WD:     //When weekday match (once per week)
+				data[0] !=  BM8563_ALARM_ENABLE;
+				data[1] !=  BM8563_ALARM_ENABLE;
+				data[2] !=  BM8563_ALARM_ENABLE;
+				data[3] &= ~BM8563_ALARM_ENABLE;
+				break;
+		}
+		bm8563wr(BM8563_REG_ALRM_MIN, 4, data);
+	}
+
+	void BM8563::setTimer(uint8_t timerValue, uint8_t timerFrequency /* 1 */, bool setInterrupt /* true */, bool enableClockOut /* false */){
+		// disableTimer();
+		// disableInterrupt(Timer);
+		// clearInterruptFlag(Timer);
+		bm8563rd(BM8563_REG_STAT2, 1, data);
+		if (setInterrupt) {
+			data[0] |= 1 << STATUS2_TI_TP;
+		} else {
+			data[0] &= ~(1 << STATUS2_TI_TP);
+		}
+		bm8563wr(BM8563_REG_STAT2, 1, data);
+		bm8563rd(BM8563_REG_TIMER1, 1, data);
+		data[0] |= (timerFrequency & BM8563_TIMER_TD10);
+		bm8563wr(BM8563_REG_TIMER1, 1, data);
+		data[0] = timerValue;
+		bm8563wr(BM8563_REG_TIMER2, 1, data);
+	}
+
+	void BM8563::enableTimer(){
+		bm8563rd(BM8563_REG_STAT2, 1, data);
+		data[0] &= ~BM8563_TIMER_TF;
+		data[0] |= (BM8563_ALARM_AF | BM8563_TIMER_TIE);
+		bm8563wr(BM8563_REG_STAT2, 1, data);
+		bm8563rd(BM8563_REG_TIMER1, 1, data);
+		data[0] |= BM8563_TIMER_TE;
+		bm8563wr(BM8563_REG_TIMER1, 1, data);
+	}
+
+	void BM8563::disableTimer(){
+		bm8563(BM8563_REG_STAT2);
+		data[0] &= ~BM8563_TIMER_TF;
+		data[0] |= BM8563_ALARM_AF;
+		bm8563(BM8563_REG_STAT2, data);
+	}
+
+	void BM8563::setSquareWave(SquareWave_t squareWave, bool enableClockOut /* false */){
+		if ((uint8_t)squareWave > SquareWave1H) return false;
+		data[0] = (uint8_t)squareWave;
+		if(enableClockOut)
+			m8563(BM8563_REG_SQW, data[0] | BM8563_CLK_ENABLE);
+		bm8563(BM8563_REG_SQW, data);
+	}
+
+	void BM8563::enableClockOut(bool enable){
+		if(enable)
+			m8563(BM8563_REG_SQW, bm8563(BM8563_REG_SQW) | BM8563_CLK_ENABLE);
+		else
+			bm8563(BM8563_REG_SQW, bm8563(BM8563_REG_SQW) & ~BM8563_CLK_ENABLE);
+	}
+
+	void BM8563::enableInterrupt(InterruptId_t intId){
+		switch(intId){
+			case Alarm1:
+			case Alarm2:
+				setBit(BM8563_REG_STAT2, STATUS2_AIE);
+				break;
+			case Timer:
+				setBit(BM8563_REG_STAT2, STATUS2_TIE);
+				break;
+		}
+	}
+
+	//Only disables the interrupt (not the alarm flag)
+	void BM8563::disableInterrupt(InterruptId_t intId){
+		switch(intId){
+			case Alarm1:
+			case Alarm2:
+				clearBit(BM8563_REG_STAT2, STATUS2_AIE);
+				break;
+			case Timer:
+				clearBit(BM8563_REG_STAT2, STATUS2_TIE);
+				break;
+		}
+	}
+
+	bool BM8563::readInterruptFlag(InterruptId_t intId){
+		switch(intId){
+			case Alarm1:
+			case Alarm2:
+				return readBit(BM8563_REG_STAT2, STATUS2_AF);
+			case Timer:
+				return readBit(BM8563_REG_STAT2, STATUS2_TF);
+		}
+		return true;
+	}
+
+	void BM8563::clearInterruptFlag(InterruptId_t intId){
+		switch(intId){
+			case Alarm1:
+			case Alarm2:
+				clearBit(BM8563_REG_STAT2, STATUS2_AF);
+				break;
+			case Timer:
+				clearBit(BM8563_REG_STAT2, STATUS2_TF);
+				break;
+		}
+	}
+
+	//Read the status register to clear the current interrupt flags
+	void BM8563::clearInterrupts(void){
+		bm8563(BM8563_REG_STAT2, bm8563(BM8563_REG_STAT2) & 0xF3);
+	}
+
+	//Returns the status byte
+	uint8_t BM8563::status(void){
+		return bm8563(BM8563_REG_STAT2);
+	}
+
+	uint8_t BM8563::bcdToDec(uint8_t bcd) {
+		return (uint8_t)(10 * ((bcd & 0xF0) >> 4) + (bcd & 0x0F));
+	}
+
+	uint8_t BM8563::decToBcd(uint8_t dec) {
+		return (uint8_t)(((dec / 10) << 4) | (dec % 10));
+	}
+
+	// Read register
+	uint8_t BM8563::bm8563(uint8_t reg) {
+		_i2cPort->beginTransmission((uint8_t)adrBM8563);
+		_i2cPort->write(reg);
+		_i2cPort->endTransmission();
+		_i2cPort->requestFrom((uint8_t)adrBM8563, uint8_t(1));
+		return _i2cPort->read();
+	}
+
+	// Write to RTC register
+	bool BM8563::bm8563(uint8_t reg, uint8_t value) {
+		_i2cPort->beginTransmission((uint8_t)adrBM8563);
+		_i2cPort->write(reg);
+		_i2cPort->write(value);
+		return (_i2cPort->endTransmission() == 0);
+	}
+
+	// Read data from RTC
+	bool BM8563::bm8563rd(uint8_t reg, uint8_t len, void *data) {
+		_i2cPort->beginTransmission((uint8_t)adrBM8563);
+		_i2cPort->write(reg);
+		_i2cPort->endTransmission(false);
+		_i2cPort->requestFrom((uint8_t)adrBM8563, len);
+		for (uint8_t i = 0; i < len; i++) ((uint8_t *)data)[i] = (uint8_t)_i2cPort->read();
+		return (_i2cPort->endTransmission() == 0);
+	}
+
+	// Write data to RTC
+	bool BM8563::bm8563wr(uint8_t reg, uint8_t len, void *data) {
+		_i2cPort->beginTransmission((uint8_t)adrBM8563);
+		_i2cPort->write(reg);
+		for (uint8_t i = 0; i < len; i++) _i2cPort->write(((uint8_t *)data)[i]);
+		return (_i2cPort->endTransmission() == 0);
+	}
+
+	void BM8563::setBit(uint8_t reg, uint8_t bitNum){
+		uint8_t value = bm8563(reg);
+		value |= (1 << bitNum);
+		bm8563(reg, value);
+	}
+
+	void BM8563::clearBit(uint8_t reg, uint8_t bitNum){
+		uint8_t value = bm8563(reg);
+		value &= ~(1 << bitNum);
+		bm8563(reg, value);
+	}
+
+	bool BM8563::readBit(uint8_t reg, uint8_t bitNum){
+		uint8_t value = bm8563(reg);
+		value &= (1 << bitNum);
+		return value;
+	}
+
+BM8563 RTC;
+
+#endif	// EZTIME_BM8563_ENABLE
