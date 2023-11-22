@@ -1,5 +1,5 @@
 #include <Arduino.h>
-
+#include <sys/param.h>
 #include <ezTime.h>
 
 #ifdef EZTIME_NETWORK_ENABLE
@@ -2470,6 +2470,25 @@ DS3231 RTC;
 	//Read the status register to clear the current interrupt flags
 	void RV3028::clearInterrupts(void){
 		rv3028(RV3028_REG_STATUS, 0);
+	}
+
+	//Set the EEOffset register
+	bool RV3028::setAgingOffset(int8_t val) {
+		int regVal = (int) val;
+		regVal = regVal <= 0 ? -regVal : (512 - regVal);
+		regVal >>= 1;
+		regVal = MIN(regVal, UINT8_MAX);  // not needed because it's guaranted to be within the range
+		return rv3028(RV3028_REG_EEOffset_8_1, (uint8_t) regVal);
+	}
+
+	int8_t RV3028::getAgingOffset() {
+		uint8_t regVal = rv3028(RV3028_REG_EEOffset_8_1);
+		int regFull = ((int) regVal) << 1;
+		if (regFull <= 128) {
+			return -((int8_t) regFull);
+		}
+		regFull = MIN(512 - MIN(regFull, UINT8_MAX), INT8_MAX);
+		return (int8_t) regFull;
 	}
 
 	uint8_t RV3028::bcdToDec(uint8_t bcd) {

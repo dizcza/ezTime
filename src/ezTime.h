@@ -748,8 +748,8 @@ namespace ezt {
 			static uint8_t status(); //Returns the status byte
 			static void clearInterrupts();
 
-		// 	static bool setAgingOffset(int8_t val);
-		// 	static int8_t getAgingOffset();
+			static bool setAgingOffset(int8_t val);
+			static int8_t getAgingOffset();
 
 		private:
 			static uint8_t bcdToDec(uint8_t bcd);
