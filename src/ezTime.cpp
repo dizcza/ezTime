@@ -2473,6 +2473,8 @@ DS3231 RTC;
 	}
 
 	//Set the EEOffset register
+	//The LSB bit (EEOffset[0]) is ignored
+	//Therefore, the saved offset is within +/-1 range
 	bool RV3028::setAgingOffset(int8_t val) {
 		int regVal = (int) val;
 		regVal = regVal <= 0 ? -regVal : (512 - regVal);
@@ -2487,7 +2489,7 @@ DS3231 RTC;
 		if (regFull <= 128) {
 			return -((int8_t) regFull);
 		}
-		regFull = MIN(512 - MIN(regFull, UINT8_MAX), INT8_MAX);
+		regFull = MIN(512 - regFull, INT8_MAX);
 		return (int8_t) regFull;
 	}
 
