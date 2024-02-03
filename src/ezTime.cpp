@@ -2611,7 +2611,7 @@ DS3231 RTC;
 
 RV3028 RTC;
 
-#elif defined (EZTIME_BM8563_ENABLE) || defined (ARDUINO_FROG_ESP32)	//K46v4
+#elif defined (EZTIME_BM8563_ENABLE) || defined (ARDUINO_FROG_ESP32) || defined (ARDUINO_TTGO_T1)	//K46v4
 #include <Wire.h>
 
 	// Initialize and detect BM8563 RTC

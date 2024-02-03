@@ -500,7 +500,7 @@ namespace ezt {
 	extern DS3231 RTC;
 
 
-#elif defined  (EZTIME_RV3028_ENABLE) || defined (ARDUINO_FROG_ESP32)  || defined (ARDUINO_WESP32)
+#elif defined  (EZTIME_RV3028_ENABLE) || defined (ARDUINO_FROG_ESP32)  || defined (ARDUINO_WESP32) || defined (ARDUINO_TTGO_T1)
 	#include <Wire.h>
 
 	#define EZTIME_RV3028_ENABLE
@@ -770,7 +770,7 @@ namespace ezt {
 
 	extern RV3028 RTC;
 
-#elif defined  (EZTIME_BM8563_ENABLE) || defined (ARDUINO_FROG_ESP32)
+#elif defined  (EZTIME_BM8563_ENABLE) || defined (ARDUINO_FROG_ESP32) || defined (ARDUINO_TTGO_T1)
 	#include <Wire.h>
 
 	#define EZTIME_BM8563_ENABLE
