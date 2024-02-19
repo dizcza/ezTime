@@ -1,3 +1,4 @@
-
+.pio/
+.vscode/
 .development
 gh-md-toc

@@ -1,6 +1,8 @@
 #include <Arduino.h>
 #include <sys/param.h>
 #include <ezTime.h>
+#include <stdlib.h>
+#include <time.h>
 
 #ifdef EZTIME_NETWORK_ENABLE
 	#ifdef EZTIME_CACHE_NVS
@@ -81,7 +83,7 @@ namespace {
 		uint16_t _ntp_interval = NTP_INTERVAL;
 		String _ntp_server = NTP_SERVER;
 	#endif
-	#if defined (EZTIME_DS3231_ENABLE) || defined (EZTIME_RV3028_ENABLE) || defined (EZTIME_BM8563_ENABLE)
+	#if defined (EZTIME_DS3231_ENABLE) || defined (EZTIME_RV3028_ENABLE) || defined (EZTIME_RV3032_ENABLE) || defined (EZTIME_BM8563_ENABLE)
 		#define HAS_RTC
 		TwoWire *_i2cPort;
 		timeStatus_t _rtc_status;
@@ -1552,7 +1554,6 @@ namespace ezt {
 }
 
 #if defined (EZTIME_DS3231_ENABLE) || defined (ARDUINO_M5Stack_Core_ESP32) || defined (ARDUINO_D1_MINI32)
-#include <Wire.h>
 
 	// Initialize and detect DS3231 RTC
 	bool DS3231::begin(TwoWire &wirePort /* = Wire */) {
@@ -1921,7 +1922,6 @@ namespace ezt {
 DS3231 RTC;
 
 #elif defined (EZTIME_RV3028_ENABLE) || defined (ARDUINO_WESP32)	//K46v1
-#include <Wire.h>
 
 	// Initialize and detect RV-3028-C7 RTC
 	bool RV3028::begin(TrickleCharge_t trickCharge /* = TCR_15K */, SwitchOver_t switchOver /* = BS_LEVEL */, TwoWire &wirePort /* = Wire */) {
@@ -2611,8 +2611,254 @@ DS3231 RTC;
 
 RV3028 RTC;
 
-#elif defined (EZTIME_BM8563_ENABLE) || defined (ARDUINO_FROG_ESP32) || defined (ARDUINO_TTGO_T1)	//K46v4
-#include <Wire.h>
+#elif defined (EZTIME_RV3032_ENABLE)  //K46v4
+
+	#define RV3032_ADDRESS 0x51 // I2C address for RV3032
+	#define RV3032_CLOCKREG 0x01 // Clock register (that is where the seconds start)
+	#define RV3032_ALARM   0x08 // Alarm minutes register
+	#define RV3032_STATUS  0x0D // Status register
+	#define RV3032_CONTROL 0x10 // Control register
+	#define RV3032_TEMP    0x0F // Temperature register
+	#define RV3032_BUSY    0x0E // contains EE busy bit
+	#define RV3032_COE     0xC0 // Clockout enable & BSM register
+	#define RV3032_OFFSET  0xC1 // Offset register
+	#define RV3032_EECMD   0x3F // EEPROM command
+	#define RV3032_EEDATA  0x3E // value for  EEPROM data transfer
+	#define RV3032_EEADDR  0x3D // address for EEPROM data transfer
+
+	bool RV3032::begin(TwoWire &wirePort) {
+		_i2cPort = &wirePort;
+		_i2cPort->beginTransmission(RV3032_ADDRESS);
+		return (_i2cPort->endTransmission() == 0);
+	}
+
+	bool RV3032::isValid() {
+		return ((readReg(RV3032_STATUS) & 0b11) == 0); // both voltage low and POR flags are cleared
+	}
+
+	bool RV3032::setTime(time_t rawtime) {
+		struct tm* tm = localtime ( &rawtime );
+		return setTime(tm);
+	}
+
+	bool RV3032::setTime(const struct tm *tm) {
+		uint8_t data[8];
+
+		data[0] = 0;  // hundreds of second
+		data[1] = bin2bcd(tm->tm_sec);
+		data[2] = bin2bcd(tm->tm_min);
+		data[3] = bin2bcd(tm->tm_hour);
+		/* The week data must be in the range 1 to 7, and to keep the start on the
+		* same day as for tm_wday have it start at 1 on Sunday. */
+		data[4] = bin2bcd(tm->tm_wday + 1);
+		data[5] = bin2bcd(tm->tm_mday);
+		data[6] = bin2bcd(tm->tm_mon + 1);  // month + century
+		if (tm->tm_year >= 100) {
+			data[6] |= 0x80; // century bit
+		}
+		// year
+		data[7] = (((tm->tm_year % 100) / 10) << 4);
+		data[7] |= (tm->tm_year % 10);
+
+		return writeReg(R_RV3032_100TH_SECONDS, data, sizeof(data));
+	}
+
+	bool RV3032::getTime(struct tm *time) {
+		uint8_t data[8] = { 0 };
+		if (!readReg(R_RV3032_100TH_SECONDS, data, sizeof(data))) {
+			return false;
+		}
+
+		/* convert to unix time structure */
+		time->tm_sec = bcd2bin(data[1]);
+		time->tm_min = bcd2bin(data[2]);
+		time->tm_hour = bcd2bin(data[3]); /* 24H */
+		time->tm_wday = bcd2bin(data[4]) - 1;
+		time->tm_mday = bcd2bin(data[5]);
+		time->tm_mon  = bcd2bin(data[6]) - 1;
+		time->tm_year = bcd2bin(data[7]) + 100;
+		time->tm_isdst = 0;
+
+		return true;
+	}
+
+	time_t RV3032::now() {
+		time_t tt = 0;
+		struct tm tm;
+		if (getTime(&tm)) {
+			tt = mktime(&tm);
+		}
+		return tt;
+	}
+
+	float RV3032::getTemperature() {
+		uint8_t data[2] = { 0 };
+		readReg(R_RV3032_TEMPERATURE_L, data, sizeof(data));
+		int16_t calcVar = ((data[1] & 0x7F) << 4) | ((data[0] & 0xF0) >> 4);
+		if (data[1] & (1 << 7)) {
+			calcVar |= (1 << 15);
+		}
+		float temperature = (float)calcVar * 0.0625;
+		return temperature;
+	}
+
+	void RV3032::setSquareWave(SquareWave_t clockOut) {
+		if (clockOut == SquareWaveDisable) {
+			enableClockOut(false);
+		} else {
+			writeReg(E_RV3032_CLKOUT2, clockOut);
+			updateEEPROM(E_RV3032_CLKOUT2);
+			enableClockOut(true);
+		}
+		log_i("%s %s OK", __func__, ClockOut2Str(clockOut));
+	}
+
+	void RV3032::waitBusy() {
+		uint8_t busy = readReg(RV3032_BUSY);
+		while (busy & 0b100) {
+			// busy with reading/writing EEPROM
+			delay(10);
+			busy = readReg(RV3032_BUSY);
+		}
+	}
+
+	void RV3032::updateEEPROM(uint8_t reg) {
+		uint8_t cnts = readReg(reg);
+		uint8_t cntrl_val = readReg(RV3032_CONTROL);
+		writeReg(RV3032_CONTROL, cntrl_val | 0b100); // set EERD = 1
+		writeReg(RV3032_EEADDR, reg);
+		writeReg(RV3032_EEDATA, cnts);
+
+		waitBusy();
+		writeReg(RV3032_EECMD, 0x21); // update EEPROM at EEADDR with value stored in EEADDR
+		waitBusy();
+
+		cntrl_val = readReg(RV3032_CONTROL);
+		writeReg(RV3032_CONTROL, cntrl_val & ~0b00000100); // set EERD = 0
+		return;
+	}
+
+	SquareWave_t RV3032::getSquareWave() {
+		return (SquareWave_t) readReg(E_RV3032_CLKOUT2);
+	}
+
+	void RV3032::enableClockOut(bool enable) {
+		uint8_t regVal = readReg(E_RV3032_PMU);
+		if (enable) {
+			regVal &= ~E_RV3032_PMU_NCLKE;
+		} else {
+			regVal |= E_RV3032_PMU_NCLKE;
+		}
+		writeReg(E_RV3032_PMU, regVal);
+		updateEEPROM(E_RV3032_PMU);
+	}
+
+	const char* RV3032::ClockOut2Str(SquareWave_t clockOut) {
+		switch (clockOut) {
+		case SquareWaveDisable:
+			return "SquareWaveDisable";
+		case SquareWave1Hz:
+			return "SquareWave1Hz";
+		case SquareWave64Hz:
+			return "SquareWave64Hz";
+		case SquareWave1024Hz:
+			return "SquareWave1024Hz";
+		case SquareWave32768Hz:
+			return "SquareWave32768Hz";
+		default:
+			return "SquareWave UNKNOWN";
+		}
+	}
+
+	void RV3032::setAgingOffset(int8_t age) {
+		if (age < -32) age = -32;
+		if (age > 31) age = 31;
+		age &= 0x3F;  // [-32, 31] --> [0, 63] range
+		writeReg(E_RV3032_OFFSET, (uint8_t) age);
+		updateEEPROM(E_RV3032_OFFSET);
+	}
+
+	int8_t RV3032::getAgingOffset() {
+		uint8_t val = readReg(E_RV3032_OFFSET);
+		val &= 0x3f;
+		int8_t age;
+		if (val > 31) {
+			// [-32, -1]
+			age = val - 64;
+		} else {
+			age = val;
+		}
+		return age;
+	}
+
+	void RV3032::setBSM(enum RV3032_BSM bsm) {
+		uint8_t regVal = readReg(E_RV3032_PMU);
+		regVal &= ~(E_RV3032_PMU_BSM_1 | E_RV3032_PMU_BSM_1);
+		regVal |= bsm;
+		writeReg(E_RV3032_PMU, regVal);
+		updateEEPROM(E_RV3032_PMU);
+		log_i("%s 0x%02x", __func__, bsm);
+	}
+
+	void RV3032::setTrickleCharge(enum RV3032_TCR tcr, enum RV3032_TCM tcm) {
+		uint8_t regVal = readReg(E_RV3032_PMU);
+		regVal &= (E_RV3032_PMU_NCLKE | E_RV3032_PMU_BSM_1 | E_RV3032_PMU_BSM_1);
+		regVal |= tcr | tcm;
+		writeReg(E_RV3032_PMU, regVal);
+		updateEEPROM(E_RV3032_PMU);
+		log_i("%s TCR 0x%02x TCM 0x%02x", __func__, tcr, tcm);
+	}
+
+	bool RV3032::writeReg(uint8_t reg_addr, uint8_t val) {
+		return writeReg(reg_addr, &val, 1);
+	}
+
+	bool RV3032::writeReg(uint8_t reg_addr, const uint8_t* data, size_t len) {
+		_i2cPort->beginTransmission(RV3032_ADDRESS);
+		_i2cPort->write(reg_addr);
+		for (int i = 0; i < len; i++) {
+			_i2cPort->write(data[i]);
+		}
+		return _i2cPort->endTransmission() == 0;  // success
+	}
+	
+	uint8_t RV3032::readReg(uint8_t reg_addr) {
+		_i2cPort->beginTransmission(RV3032_ADDRESS);
+		_i2cPort->write(reg_addr);
+		_i2cPort->endTransmission(false);
+		_i2cPort->requestFrom((uint8_t) RV3032_ADDRESS, (uint8_t) 1);
+		uint8_t res = _i2cPort->read();
+		return res;
+	}
+
+	bool RV3032::readReg(uint8_t reg_addr, uint8_t* data, size_t len) {
+		_i2cPort->beginTransmission(RV3032_ADDRESS);
+		_i2cPort->write(reg_addr);
+		_i2cPort->endTransmission(false);
+		if (_i2cPort->requestFrom((uint8_t) RV3032_ADDRESS, (uint8_t) len) != len) {
+			return false;
+		}
+		for (int i = 0; i < len; i++) {
+			data[i] = _i2cPort->read();
+		}
+		return true;
+	}
+
+	uint8_t RV3032::bcd2bin(uint8_t val)
+	{
+		return (val >> 4) * 10 + (val & 0x0f);
+	}
+
+	uint8_t RV3032::bin2bcd(uint8_t val)
+	{
+		return ((val / 10) << 4) | (val % 10);
+	}
+
+
+RV3032 RTC;
+
+
+#elif defined (EZTIME_BM8563_ENABLE) || defined (ARDUINO_FROG_ESP32)	//K46v4
 
 	// Initialize and detect BM8563 RTC
 	bool BM8563::begin(TwoWire &wirePort /* = Wire */) {

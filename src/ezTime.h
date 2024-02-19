@@ -36,8 +36,14 @@
 // RV-3028-C7 RTC connected
 //#define EZTIME_RV3028_ENABLE
 
+// RV-3032-C7 RTC connected
+//#define EZTIME_RV3032_ENABLE
+
 // Warranty void if edited below this point...
 
+
+#include <Wire.h>
+#include <stdint.h>
 
 
 #if !defined(__time_t_defined) // avoid conflict with newlib or other posix libc
@@ -371,8 +377,6 @@ namespace ezt {
 
 
 #if defined (EZTIME_DS3231_ENABLE) || defined (ARDUINO_M5Stack_Core_ESP32) || defined (ARDUINO_D1_MINI32)
-	#include <Wire.h>
-	#include <stdint.h>
 
 	#define EZTIME_DS3231_ENABLE
 
@@ -500,8 +504,7 @@ namespace ezt {
 	extern DS3231 RTC;
 
 
-#elif defined  (EZTIME_RV3028_ENABLE) || defined (ARDUINO_FROG_ESP32)  || defined (ARDUINO_WESP32) || defined (ARDUINO_TTGO_T1)
-	#include <Wire.h>
+#elif defined  (EZTIME_RV3028_ENABLE) || defined (ARDUINO_FROG_ESP32)  || defined (ARDUINO_WESP32)
 
 	#define EZTIME_RV3028_ENABLE
 
@@ -770,8 +773,218 @@ namespace ezt {
 
 	extern RV3028 RTC;
 
-#elif defined  (EZTIME_BM8563_ENABLE) || defined (ARDUINO_FROG_ESP32) || defined (ARDUINO_TTGO_T1)
-	#include <Wire.h>
+
+#elif defined  (EZTIME_RV3032_ENABLE) || defined (ARDUINO_FROG_ESP32)  || defined (ARDUINO_WESP32) || defined (ARDUINO_TTGO_T1)
+
+	#define EZTIME_RV3032_ENABLE
+
+	#define RV3032_ADDRESS          0x51
+
+	/* Registers of the RV-3032-C7 */
+	#define R_RV3032_100TH_SECONDS  0x00
+	#define R_RV3032_SECONDS        0x01
+	#define R_RV3032_MINUTES        0x02
+	#define R_RV3032_HOURS          0x03
+	#define R_RV3032_WEEKDAY        0x04
+	#define R_RV3032_DATE           0x05
+	#define R_RV3032_MONTH          0x06
+	#define R_RV3032_YEAR           0x07
+	#define R_RV3032_MIN_ALARM      0x08
+	#define R_RV3032_MIN_ALARM_AE_M     0x80
+	#define R_RV3032_HOUR_ALARM     0x09
+	#define R_RV3032_HOUR_ALARM_AE_H    0x80
+	#define R_RV3032_DATE_ALARM     0x0A
+	#define R_RV3032_DATE_ALARM_AE_D    0x80
+	#define R_RV3032_TIMER_VALUE_0  0x0B
+	#define R_RV3032_TIMER_VALUE_1  0x0C
+	#define R_RV3032_STATUS         0x0D
+	#define R_RV3032_STATUS_THX         0x80
+	#define R_RV3032_STATUS_TLF         0x40
+	#define R_RV3032_STATUS_UF          0x20
+	#define R_RV3032_STATUS_TF          0x10
+	#define R_RV3032_STATUS_AF          0x08
+	#define R_RV3032_STATUS_EVF         0x04
+	#define R_RV3032_STATUS_PORF        0x02
+	#define R_RV3032_STATUS_VLF         0x01
+	#define R_RV3032_TEMPERATURE_L      0x0E  // contains EE busy bit
+	#define R_RV3032_TEMPERATURE_L_EEF      0x08
+	#define R_RV3032_TEMPERATURE_L_EEBUSY   0x04
+	#define R_RV3032_TEMPERATURE_L_CLKF     0x02
+	#define R_RV3032_TEMPERATURE_L_BSF      0x01
+	#define R_RV3032_TEMPERATURE_H  0x0F
+	#define R_RV3032_CONTROL_1      0x10
+	#define R_RV3032_CONTROL_1_x        0x20
+	#define R_RV3032_CONTROL_1_USEL     0x10
+	#define R_RV3032_CONTROL_1_TE       0x08
+	#define R_RV3032_CONTROL_1_EERD     0x04
+	#define R_RV3032_CONTROL_1_TD1      0x02
+	#define R_RV3032_CONTROL_1_TD0      0x01
+	#define R_RV3032_CONTROL_2      0x11
+	#define R_RV3032_CONTROL_2_CLKIE    0x40
+	#define R_RV3032_CONTROL_2_UIE      0x20
+	#define R_RV3032_CONTROL_2_TIE      0x10
+	#define R_RV3032_CONTROL_2_AIE      0x08
+	#define R_RV3032_CONTROL_2_EIE      0x04
+	#define R_RV3032_CONTROL_2_X        0x02
+	#define R_RV3032_CONTROL_2_STOP     0x01
+	#define R_RV3032_CONTROL_3      0x12
+	#define R_RV3032_CONTROL_3_BSIE     0x10
+	#define R_RV3032_CONTROL_3_THE      0x08
+	#define R_RV3032_CONTROL_3_TLE      0x04
+	#define R_RV3032_CONTROL_3_THIE     0x02
+	#define R_RV3032_CONTROL_3_TLIE     0x01
+	#define R_RV3032_TIMESTAMP_CTRL 0x13
+	#define R_RV3032_TIMESTAMP_CTRL_EVR     0x20
+	#define R_RV3032_TIMESTAMP_CTRL_THR     0x10
+	#define R_RV3032_TIMESTAMP_CTRL_TLR     0x08
+	#define R_RV3032_TIMESTAMP_CTRL_EVOW    0x04
+	#define R_RV3032_TIMESTAMP_CTRL_THOW    0x02
+	#define R_RV3032_TIMESTAMP_CTRL_TLIE    0x01
+	#define R_RV3032_COCK_INT_MASK  0x14
+	#define R_RV3032_COCK_INT_MASK_CLKD     0x80
+	#define R_RV3032_COCK_INT_MASK_INTDE    0x40
+	#define R_RV3032_COCK_INT_MASK_CEIE     0x20
+	#define R_RV3032_COCK_INT_MASK_CAIE     0x10
+	#define R_RV3032_COCK_INT_MASK_CTIE     0x08
+	#define R_RV3032_COCK_INT_MASK_CUIE     0x04
+	#define R_RV3032_COCK_INT_MASK_CTHIE    0x02
+	#define R_RV3032_COCK_INT_MASK_CTLIE    0x01
+	#define R_RV3032_EVI_CONTROL    0x15
+	#define R_RV3032_EVI_CONTROL_CLKDE      0x80
+	#define R_RV3032_EVI_CONTROL_EHL        0x40
+	#define R_RV3032_EVI_CONTROL_ET1        0x20
+	#define R_RV3032_EVI_CONTROL_ET0        0x10
+	#define R_RV3032_EVI_CONTROL_ESYN       0x01
+	#define R_RV3032_TLOW_THRESHLD  0x16
+	#define R_RV3032_THIGH_THRESHLD 0x17
+	#define R_RV3032_TS_TLOW_COUNT  0x18
+	#define R_RV3032_TS_TLOW_SEC    0x19
+	#define R_RV3032_TS_TLOW_MIN    0x1A
+	#define R_RV3032_TS_TLOW_HOUR   0x1B
+	#define R_RV3032_TS_TLOW_DATE   0x1C
+	#define R_RV3032_TS_TLOW_MONTH  0x1D
+	#define R_RV3032_TS_TLOW_YEAR   0x1E
+	#define R_RV3032_TS_THIGH_COUNT 0x1F
+	#define R_RV3032_TS_THIGH_SEC   0x20
+	#define R_RV3032_TS_THIGH_MIN   0x21
+	#define R_RV3032_TS_THIGH_HOUR  0x22
+	#define R_RV3032_TS_THIGH_DATE  0x23
+	#define R_RV3032_TS_THIGH_MONTH 0x24
+	#define R_RV3032_TS_THIGH_YEAR  0x25
+	#define R_RV3032_TS_EVI_COUNT   0x26
+	#define R_RV3032_TS_EVI_100THS  0x27
+	#define R_RV3032_TS_EVI_SEC     0x28
+	#define R_RV3032_TS_EVI_MIN     0x29
+	#define R_RV3032_TS_EVI_HOUR    0x2A
+	#define R_RV3032_TS_EVI_DATE    0x2B
+	#define R_RV3032_TS_EVI_MONTH   0x2C
+	#define R_RV3032_TS_EVI_YEAR    0x2D
+	#define R_RV3032_PASSWORD_0     0x39
+	#define R_RV3032_PASSWORD_1     0x3A
+	#define R_RV3032_PASSWORD_2     0x3B
+	#define R_RV3032_PASSWORD_3     0x3C
+	#define R_RV3032_EE_ADDRESS     0x3D
+	#define R_RV3032_EE_DATA        0x3E
+	#define R_RV3032_EE_COMMAND     0x3F
+	#define R_RV3032_EE_COMMAND_UPDATE  0x11
+	#define R_RV3032_EE_COMMAND_REFRESH 0x12
+	#define R_RV3032_EE_COMMAND_WRITE   0x21
+	#define R_RV3032_EE_COMMAND_READ    0x22
+	#define R_RV3032_USER_RAM_START 0x40
+	#define R_RV3032_USER_RAM_END   0x4F
+
+	#define E_RV3032_PMU                0xC0
+	#define E_RV3032_PMU_NCLKE          0x40
+	#define E_RV3032_PMU_BSM_1          0x20
+	#define E_RV3032_PMU_BSM_0          0x10
+	#define E_RV3032_PMU_TCR_1          0x08
+	#define E_RV3032_PMU_TCR_0          0x04
+	#define E_RV3032_PMU_TCM_1          0x02
+	#define E_RV3032_PMU_TCM_0          0x01
+	#define E_RV3032_OFFSET             0xC1
+	#define E_RV3032_CLKOUT1            0xC2
+	#define E_RV3032_CLKOUT2            0xC3
+	#define E_RV3032_CLKOUT2_OS         0x80
+	#define E_RV3032_CLKOUT2_FD_1       0x40
+	#define E_RV3032_CLKOUT2_FD_0       0x20
+	#define E_RV3032_TREFERENCE0    0xC4
+	#define E_RV3032_TREFERENCE1    0xC5
+	#define E_RV3032_PASSWORD0      0xC6
+	#define E_RV3032_PASSWORD1      0xC7
+	#define E_RV3032_PASSWORD2      0xC8
+	#define E_RV3032_PASSWORD3      0xC9
+	#define E_RV3032_EEPWE          0xCA
+	#define E_RV3032_USER_EEPROM_START  0xCB
+	#define E_RV3032_USER_EEPROM_END    0xEA
+
+	typedef enum {
+		SquareWaveDisable = 0xFF,
+		SquareWave1Hz     = E_RV3032_CLKOUT2_FD_0 | E_RV3032_CLKOUT2_FD_1,
+		SquareWave64Hz    = E_RV3032_CLKOUT2_FD_1,
+		SquareWave1024Hz  = E_RV3032_CLKOUT2_FD_0,
+		SquareWave32768Hz = 0,
+	} SquareWave_t;
+
+	/**
+	 * DIRECT:
+	 *   - If VDD < VBACKUP, switchover occurs from VDD to VBACKUP.
+	 * LEVEL:
+	 *   - If VBACKUP > VTH:LSM (typical 2.0 V) AND VDD < VTH:LSM (typical 2.0 V),
+	 *     switchover occurs from VDD to VBACKUP.
+	 *   - If VDD < VTH:LSM (typical 2.0 V), the module is automatically in DSM Mode.
+	 */
+	enum RV3032_BSM{
+		RV3032_BSM_DISABLED  = 0,
+		RV3032_BSM_DIRECT    = E_RV3032_PMU_BSM_0,
+		RV3032_BSM_LEVEL     = E_RV3032_PMU_BSM_1
+	};
+
+	enum RV3032_TCR{
+		RV3032_TCR_0_6kOhm   = 0,
+		RV3032_TCR_2kOhm     = E_RV3032_PMU_TCR_0,
+		RV3032_TCR_7kOhm     = E_RV3032_PMU_TCR_1,
+		RV3032_TCR_12kOhm    = E_RV3032_PMU_TCR_0 | E_RV3032_PMU_TCR_1
+	};
+
+	enum RV3032_TCM{
+		RV3032_TCM_OFF  = 0,                                     /**< Disabled                               */
+		RV3032_TCM_175  = E_RV3032_PMU_TCM_0,                    /**< VDD (BSM=DIRECT) or 1.75V (BSM=LEVEL)  */
+		RV3032_TCM_300  = E_RV3032_PMU_TCM_1,                    /**< 3.0V (BSM=LEVEL)                       */
+		RV3032_TCM_440  = E_RV3032_PMU_TCM_0 | E_RV3032_PMU_TCM_1/**< 4.4V (BSM=LEVEL)                       */
+	};
+
+	class RV3032 {
+		public:
+			static bool begin(TwoWire &wirePort = Wire);
+			static bool isValid();
+			static bool setTime(const struct tm *tm);
+			static bool setTime(time_t rawtime);
+			static bool getTime(struct tm *tm);
+			static time_t now();
+			static float getTemperature();
+			static void setSquareWave(SquareWave_t clockOut);
+			static SquareWave_t getSquareWave();
+			static void enableClockOut(bool enable = true);
+			static const char* ClockOut2Str(SquareWave_t clockOut);
+			static void setAgingOffset(int8_t val);
+			static int8_t getAgingOffset();
+			static void setBSM(enum RV3032_BSM bsm);
+			static void setTrickleCharge(enum RV3032_TCR tcr, enum RV3032_TCM tcm);
+
+		private:
+			static void waitBusy();
+			static void updateEEPROM(uint8_t reg);
+			static bool writeReg(uint8_t reg_addr, uint8_t val);
+			static bool writeReg(uint8_t reg_addr, const uint8_t* data, size_t len);
+			static uint8_t readReg(uint8_t reg_addr);
+			static bool readReg(uint8_t reg_addr, uint8_t* data_out, size_t len);
+			static uint8_t bcd2bin(uint8_t val);
+			static uint8_t bin2bcd(uint8_t val);
+	};
+
+	extern RV3032 RTC;
+
+#elif defined  (EZTIME_BM8563_ENABLE) || defined (ARDUINO_FROG_ESP32)
 
 	#define EZTIME_BM8563_ENABLE
 
