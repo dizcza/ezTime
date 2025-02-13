@@ -8,7 +8,7 @@
 #define EZTIME_LANGUAGE EN
 
 // Compiles in NTP updating, timezoned fetching and caching 
-#define EZTIME_NETWORK_ENABLE
+// #define EZTIME_NETWORK_ENABLE
 
 // Arduino Ethernet shields
 // #define EZTIME_ETHERNET
