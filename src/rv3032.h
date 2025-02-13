@@ -245,7 +245,6 @@ esp_err_t rv3032_setTime(const struct tm *tm);
 esp_err_t rv3032_setTimePrecise(const struct tm *tm);
 esp_err_t rv3032_getTime(struct tm *tm);
 esp_err_t rv3032_getTimePrecise(rv3032_time_t* timePrecise);
-int64_t rv3032_getMicroseconds();
 
 esp_err_t rv3032_getTemperature(float *temperature);
 

@@ -1,19 +1,30 @@
+#include <math.h>
+#include <stdint.h>
+#include <sys/param.h>
+#include <string.h>
+
 #include "esp_err.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
 
 #include "rv3032.h"
-#include "bsp.h"
-#include <math.h>
-#include <stdint.h>
-#include <sys/param.h>
 
 
 #ifndef ARDUINO_ARCH_ESP32
 #include "i2cdev.h"
 static i2c_dev_t i2cdev = {};
 #endif  // ARDUINO_ARCH_ESP32
+
+
+#define RV_ERRCHECK(ARG)  do { \
+    esp_err_t err = (ARG); \
+    if (err != ESP_OK) { \
+        ESP_LOGW(TAG, "%s line %d: %s", __FUNCTION__, __LINE__, esp_err_to_name(err)); \
+        return err; \
+    } \
+    } while (0)
+
 
 
 #ifndef TAG
@@ -54,13 +65,13 @@ static uint64_t rv3032_extractUINT(const uint8_t *buff, int bytes) {
 
 static esp_err_t rv3032_changeRegisterMask(uint8_t reg, uint8_t mask, bool enable) {
     uint8_t regVal;
-    BSP_SOFTCHECK(rv3032_readReg(reg, &regVal));
+    RV_ERRCHECK(rv3032_readReg(reg, &regVal));
     if (enable) {
 		regVal |= mask;
 	} else {
 		regVal &= ~mask;
 	}
-    BSP_SOFTCHECK(rv3032_writeReg(reg, regVal));
+    RV_ERRCHECK(rv3032_writeReg(reg, regVal));
     return ESP_OK;
 }
 
@@ -88,7 +99,7 @@ esp_err_t rv3032_init(int port, int sda_gpio, int scl_gpio)
     i2cdev.cfg.scl_pullup_en = GPIO_PULLUP_ENABLE;
     i2cdev.cfg.master.clk_speed = 400000;
     i2c_dev_create_mutex(&i2cdev);
-    BSP_SOFTCHECK(rv3032_ping());
+    RV_ERRCHECK(rv3032_ping());
     rv3032_writeReg(R_RV3032_STATUS, 0);  // clear the status
     rv3032_updateEEPROM(R_RV3032_STATUS);
     rv3032_writeReg(R_RV3032_EVI_CONTROL, 0);
@@ -219,17 +230,6 @@ static void rv3032_unpackDateTime(struct tm *time, const uint8_t data[7]) {
 }
 
 
-int64_t rv3032_getMicroseconds() {
-	int64_t microseconds = 0;
-	rv3032_time_t timePrecise = {};
-	if (rv3032_getTimePrecise(&timePrecise) == ESP_OK) {
-	    const int64_t t_utc = mktime(&timePrecise.tm);
-	    microseconds = t_utc * SECOND_US + ((int64_t) timePrecise.seconds100th) * 10000LL;	
-	}
-	return microseconds;
-}
-
-
 esp_err_t rv3032_getTime(struct tm *time) {
     memset(time, 0, sizeof(struct tm));
     uint8_t data[7] = { 0 };
@@ -251,7 +251,7 @@ esp_err_t rv3032_getTimePrecise(rv3032_time_t* timePrecise) {
 esp_err_t rv3032_getTemperature(float *temperature)
 {
     uint8_t data[2] = { 0 };
-    BSP_SOFTCHECK(rv3032_readRegBuff(R_RV3032_TEMPERATURE_L, data, sizeof(data)));
+    RV_ERRCHECK(rv3032_readRegBuff(R_RV3032_TEMPERATURE_L, data, sizeof(data)));
     int16_t calcVar = (((int16_t) data[1]) << 4) | ((data[0] & 0xF0) >> 4);
     if (data[1] & (1 << 7)) {
     	// Temp is 12-bit signed, inverse
@@ -264,11 +264,11 @@ esp_err_t rv3032_getTemperature(float *temperature)
 
 esp_err_t rv3032_waitBusy() {
     uint8_t busy;
-    BSP_SOFTCHECK(rv3032_readReg(R_RV3032_TEMPERATURE_L, &busy));
+    RV_ERRCHECK(rv3032_readReg(R_RV3032_TEMPERATURE_L, &busy));
     while (busy & R_RV3032_TEMPERATURE_L_EEBUSY) {
         // busy with reading/writing EEPROM
         vTaskDelay(pdMS_TO_TICKS(10));
-        BSP_SOFTCHECK(rv3032_readReg(R_RV3032_TEMPERATURE_L, &busy));
+        RV_ERRCHECK(rv3032_readReg(R_RV3032_TEMPERATURE_L, &busy));
     }
     return ESP_OK;
 }
@@ -303,7 +303,7 @@ esp_err_t rv3032_refreshEEPROM() {
 
 esp_err_t rv3032_readEEPROMBuff(uint8_t addr, uint8_t *buff, size_t len) {
 	uint8_t cntrl_val;
-    BSP_SOFTCHECK(rv3032_readReg(R_RV3032_CONTROL_1, &cntrl_val));
+    RV_ERRCHECK(rv3032_readReg(R_RV3032_CONTROL_1, &cntrl_val));
     rv3032_writeReg(R_RV3032_CONTROL_1, cntrl_val | R_RV3032_CONTROL_1_EERD); // set EERD = 1
 
     for (int i = 0; i < len; i++) {
@@ -332,18 +332,18 @@ esp_err_t rv3032_readEEPROM(uint8_t addr, uint8_t *regVal) {
 
 esp_err_t rv3032_updateEEPROM(uint8_t reg) {
     uint8_t regVal;
-    BSP_SOFTCHECK(rv3032_readReg(reg, &regVal));
-    BSP_SOFTCHECK(rv3032_writeEEPROM(reg, regVal));
+    RV_ERRCHECK(rv3032_readReg(reg, &regVal));
+    RV_ERRCHECK(rv3032_writeEEPROM(reg, regVal));
     return ESP_OK;
 }
 
 
 esp_err_t rv3032_setClockOutHF(uint16_t hfClock_steps) {
-    BSP_SOFTCHECK(rv3032_writeReg(E_RV3032_CLKOUT1, hfClock_steps));
-    BSP_SOFTCHECK(rv3032_updateEEPROM(E_RV3032_CLKOUT1));
-    BSP_SOFTCHECK(rv3032_writeReg(E_RV3032_CLKOUT2, RV3032_HF_MODE | ((hfClock_steps >> 8) & 0x1F)));
-    BSP_SOFTCHECK(rv3032_updateEEPROM(E_RV3032_CLKOUT2));
-    BSP_SOFTCHECK(rv3032_enableClockOut(true));
+    RV_ERRCHECK(rv3032_writeReg(E_RV3032_CLKOUT1, hfClock_steps));
+    RV_ERRCHECK(rv3032_updateEEPROM(E_RV3032_CLKOUT1));
+    RV_ERRCHECK(rv3032_writeReg(E_RV3032_CLKOUT2, RV3032_HF_MODE | ((hfClock_steps >> 8) & 0x1F)));
+    RV_ERRCHECK(rv3032_updateEEPROM(E_RV3032_CLKOUT2));
+    RV_ERRCHECK(rv3032_enableClockOut(true));
     return ESP_OK;
 }
 
@@ -399,15 +399,15 @@ static int8_t rv3032_convertByteToAge(uint8_t val) {
 
 esp_err_t rv3032_getAgeOffset(int8_t *age) {
     uint8_t val = 0;
-    BSP_SOFTCHECK(rv3032_readReg(E_RV3032_OFFSET, &val));
+    RV_ERRCHECK(rv3032_readReg(E_RV3032_OFFSET, &val));
 	*age = rv3032_convertByteToAge(val);
     return ESP_OK;
 }
 
 
 esp_err_t rv3032_setAgeOffset(int8_t age) {
-    BSP_SOFTCHECK(rv3032_writeReg(E_RV3032_OFFSET, rv3032_convertAgeToByte(age)));
-    BSP_SOFTCHECK(rv3032_updateEEPROM(E_RV3032_OFFSET));
+    RV_ERRCHECK(rv3032_writeReg(E_RV3032_OFFSET, rv3032_convertAgeToByte(age)));
+    RV_ERRCHECK(rv3032_updateEEPROM(E_RV3032_OFFSET));
     return ESP_OK;
 }
 
@@ -418,8 +418,8 @@ esp_err_t rv3032_setClockOut(enum RV3032_CLKOUT clockOut)
         ESP_LOGW(TAG, "For RV3032_HF_MODE, use rv3032_setClockOutHF()");
         return ESP_ERR_INVALID_ARG;
     }
-    BSP_SOFTCHECK(rv3032_writeReg(E_RV3032_CLKOUT2, clockOut));
-    BSP_SOFTCHECK(rv3032_updateEEPROM(E_RV3032_CLKOUT2));
+    RV_ERRCHECK(rv3032_writeReg(E_RV3032_CLKOUT2, clockOut));
+    RV_ERRCHECK(rv3032_updateEEPROM(E_RV3032_CLKOUT2));
     ESP_LOGI(TAG, "%s %s OK", __func__, rv3032_ClockOut2Str(clockOut));
     return ESP_OK;
 }
@@ -428,8 +428,8 @@ esp_err_t rv3032_setClockOut(enum RV3032_CLKOUT clockOut)
 esp_err_t rv3032_enableClockOut(bool enable)
 {
 	// We need to negate the E_RV3032_PMU_NCLKE flag
-    BSP_SOFTCHECK(rv3032_changeRegisterMask(E_RV3032_PMU, E_RV3032_PMU_NCLKE, !enable));
-    BSP_SOFTCHECK(rv3032_updateEEPROM(E_RV3032_PMU));
+    RV_ERRCHECK(rv3032_changeRegisterMask(E_RV3032_PMU, E_RV3032_PMU_NCLKE, !enable));
+    RV_ERRCHECK(rv3032_updateEEPROM(E_RV3032_PMU));
     ESP_LOGI(TAG, "%s CLKOUT", enable ? "Enabled" : "Disabled");
     return ESP_OK;
 }
@@ -438,11 +438,11 @@ esp_err_t rv3032_enableClockOut(bool enable)
 esp_err_t rv3032_setBSM(enum RV3032_BSM bsm)
 {
     uint8_t regVal;
-    BSP_SOFTCHECK(rv3032_readReg(E_RV3032_PMU, &regVal));
+    RV_ERRCHECK(rv3032_readReg(E_RV3032_PMU, &regVal));
     regVal &= ~(E_RV3032_PMU_BSM_1 | E_RV3032_PMU_BSM_1);
     regVal |= bsm;
-    BSP_SOFTCHECK(rv3032_writeReg(E_RV3032_PMU, regVal));
-    BSP_SOFTCHECK(rv3032_updateEEPROM(E_RV3032_PMU));
+    RV_ERRCHECK(rv3032_writeReg(E_RV3032_PMU, regVal));
+    RV_ERRCHECK(rv3032_updateEEPROM(E_RV3032_PMU));
     ESP_LOGI(TAG, "%s 0x%02x", __func__, bsm);
     return ESP_OK;
 }
@@ -450,11 +450,11 @@ esp_err_t rv3032_setBSM(enum RV3032_BSM bsm)
 esp_err_t rv3032_setTrickleCharge(enum RV3032_TCR tcr, enum RV3032_TCM tcm)
 {
     uint8_t regVal;
-    BSP_SOFTCHECK(rv3032_readReg(E_RV3032_PMU, &regVal));
+    RV_ERRCHECK(rv3032_readReg(E_RV3032_PMU, &regVal));
     regVal &= (E_RV3032_PMU_NCLKE | E_RV3032_PMU_BSM_1 | E_RV3032_PMU_BSM_1);
     regVal |= tcr | tcm;
-    BSP_SOFTCHECK(rv3032_writeReg(E_RV3032_PMU, regVal));
-    BSP_SOFTCHECK(rv3032_updateEEPROM(E_RV3032_PMU));
+    RV_ERRCHECK(rv3032_writeReg(E_RV3032_PMU, regVal));
+    RV_ERRCHECK(rv3032_updateEEPROM(E_RV3032_PMU));
     ESP_LOGI(TAG, "%s TCR 0x%02x TCM 0x%02x", __func__, tcr, tcm);
     return ESP_OK;
 }
@@ -472,14 +472,14 @@ esp_err_t rv3032_enableEVI(bool enable) {
 	
     uint8_t regVal;
 	// Set EHL bit to 0 or 1 to choose falling edge/low level or rising edge/high level detection on pin EVI.
-    BSP_SOFTCHECK(rv3032_readReg(R_RV3032_EVI_CONTROL, &regVal));
+    RV_ERRCHECK(rv3032_readReg(R_RV3032_EVI_CONTROL, &regVal));
     regVal |= R_RV3032_EVI_CONTROL_EHL;  // PPS ticks on rising edge
     if (enable) {
     	regVal |= R_RV3032_EVI_CONTROL_ESYN;
 	} else {
 		regVal &= ~R_RV3032_EVI_CONTROL_ESYN;
 	}
-    BSP_SOFTCHECK(rv3032_writeReg(R_RV3032_EVI_CONTROL, regVal));
+    RV_ERRCHECK(rv3032_writeReg(R_RV3032_EVI_CONTROL, regVal));
 
     // Set CEIE bit to 1 if you want to enable clock output when external event occurs
     rv3032_setRegisterMask(R_RV3032_COCK_INT_MASK, R_RV3032_COCK_INT_MASK_CEIE);
@@ -494,7 +494,7 @@ uint8_t rv3032_readUserEEPROM(uint8_t addr) {
 		return 0;
 	}
 	uint8_t regVal = 0;
-	BSP_SOFTCHECK(rv3032_readEEPROM(addr, &regVal));
+	RV_ERRCHECK(rv3032_readEEPROM(addr, &regVal));
 	return regVal;
 }
 
@@ -503,7 +503,7 @@ esp_err_t rv3032_writeUserEEPROM(uint8_t addr, uint8_t val) {
 	if (addr < E_RV3032_USER_EEPROM_START || addr > E_RV3032_USER_EEPROM_END) {
 		return ESP_ERR_INVALID_ARG;
 	}
-    BSP_SOFTCHECK(rv3032_writeEEPROM(addr, val));
+    RV_ERRCHECK(rv3032_writeEEPROM(addr, val));
     return ESP_OK;
 }
 
@@ -519,7 +519,7 @@ esp_err_t rv3032_writeEEPROMESYNSupported(bool val) {
 
 
 esp_err_t rv3032_writeEEPROMAgeBest(int8_t ageBest) {
-	BSP_SOFTCHECK(rv3032_writeUserEEPROM(E_RV3032_EEPROM_AGE_BEST, rv3032_convertAgeToByte(ageBest)));
+	RV_ERRCHECK(rv3032_writeUserEEPROM(E_RV3032_EEPROM_AGE_BEST, rv3032_convertAgeToByte(ageBest)));
 	ESP_LOGI(TAG, "Saved AGE BEST %d", ageBest);
 	return ESP_OK;
 }
@@ -567,7 +567,7 @@ esp_err_t rv3032_writeEEPROMAgeStat(const rtc_age_stat_t* ageStat) {
 
 esp_err_t rv3032_getEEPROMAgeStat(rtc_age_stat_t* ageStat) {
 	uint8_t data[9] = {};
-	BSP_SOFTCHECK(rv3032_readEEPROMBuff(E_RV3032_EEEROM_AGE_STAT, data, sizeof(data)));
+	RV_ERRCHECK(rv3032_readEEPROMBuff(E_RV3032_EEEROM_AGE_STAT, data, sizeof(data)));
 	bool all_zero = true;
 	for (int i = 0; i < sizeof(data); i++) {
 		all_zero &= data[i] == 0;
