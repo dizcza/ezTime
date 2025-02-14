@@ -132,7 +132,7 @@ namespace {
 
 namespace ezt {
 	
-	IRAM_ATTR void syncToPPS() {
+	void syncToPPS() {
 		_last_sync_time++;
 		_last_sync_micros = 0;
 		_last_read_t = _last_sync_time + micros() / _micros_in_sec;
