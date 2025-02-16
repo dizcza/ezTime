@@ -302,9 +302,7 @@ esp_err_t rv3032_refreshEEPROM() {
 
 
 esp_err_t rv3032_readEEPROMBuff(uint8_t addr, uint8_t *buff, size_t len) {
-	uint8_t cntrl_val;
-    RV_ERRCHECK(rv3032_readReg(R_RV3032_CONTROL_1, &cntrl_val));
-    rv3032_writeReg(R_RV3032_CONTROL_1, cntrl_val | R_RV3032_CONTROL_1_EERD); // set EERD = 1
+    rv3032_setRegisterMask(R_RV3032_CONTROL_1, R_RV3032_CONTROL_1_EERD);  // set EERD = 1
 
     for (int i = 0; i < len; i++) {
 	    rv3032_writeReg(R_RV3032_EE_ADDRESS, addr + i);
@@ -494,7 +492,7 @@ uint8_t rv3032_readUserEEPROM(uint8_t addr) {
 		return 0;
 	}
 	uint8_t regVal = 0;
-	RV_ERRCHECK(rv3032_readEEPROM(addr, &regVal));
+	rv3032_readEEPROM(addr, &regVal);
 	return regVal;
 }
 
