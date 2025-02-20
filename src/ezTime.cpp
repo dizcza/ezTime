@@ -83,7 +83,7 @@ namespace {
 		uint16_t _ntp_interval = NTP_INTERVAL;
 		String _ntp_server = NTP_SERVER;
 	#endif
-	#if defined (EZTIME_DS3231_ENABLE) || defined (EZTIME_RV3028_ENABLE) || defined (EZTIME_RV3032_ENABLE) || defined (EZTIME_BM8563_ENABLE)
+	#if defined (EZTIME_DS3231_ENABLE) || defined (EZTIME_RV3028_ENABLE) || defined (EZTIME_BM8563_ENABLE)
 		#define HAS_RTC
 		TwoWire *_i2cPort;
 		timeStatus_t _rtc_status;
@@ -91,6 +91,9 @@ namespace {
 		time_t _rtc_set_time;
 		uint64_t _rtc_set_micros;
 		uint8_t data[7];
+	#elif defined (EZTIME_RV3032_ENABLE)
+		#define HAS_RTC
+		TwoWire *_i2cPort;
 	#endif
 
 	void triggerError(const ezError_t err) {

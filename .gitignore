@@ -2,3 +2,4 @@
 .vscode/
 .development
 gh-md-toc
+build/
