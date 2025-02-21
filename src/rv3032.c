@@ -26,12 +26,14 @@ static i2c_dev_t i2cdev = {};
     } while (0)
 
 
+#define RV3032_TEMP_COEF0_MAX  (0.01)
+#define RV3032_TEMP_COEF1_MAX  (1.00)
+#define RV3032_TEMP_COEF2_MAX  (20.0)
+
 
 #ifndef TAG
 static const char* TAG = "RV3032";
 #endif  /* TAG */
-
-static const int8_t offset_delta_max = 10;  // in [us]
 
 
 static uint8_t bcd2bin(uint8_t val)
@@ -528,6 +530,18 @@ int8_t rv3032_getEEPROMAgeBest() {
 }
 
 
+int8_t rv3032_getEEPROMAgeRoom() {
+	return rv3032_convertByteToAge(rv3032_readUserEEPROM(E_RV3032_EEEROM_AGE_ROOM));
+}
+
+
+esp_err_t rv3032_writeEEPROMAgeRoom(int8_t ageRoom) {
+	RV_ERRCHECK(rv3032_writeUserEEPROM(E_RV3032_EEEROM_AGE_ROOM, rv3032_convertAgeToByte(ageRoom)));
+	ESP_LOGI(TAG, "Saved AGE ROOM %d", ageRoom);
+	return ESP_OK;
+}
+
+
 esp_err_t rv3032_writeEEPROMClkoutOffset(int32_t offset) {
 	uint8_t data[2];
 	rv3032_putUINT(data, offset / 20, sizeof(data));
@@ -544,50 +558,26 @@ int32_t rv3032_getEEPROMClkoutOffset() {
 }
 
 
-esp_err_t rv3032_writeEEPROMAgeStat(const rtc_age_stat_t* ageStat) {
-	uint8_t data[9] = {};
-	for (int i = 0; i < 3; i++) {
-		if (ageStat->age[i] < RV3032_AGE_MIN || ageStat->age[i] > RV3032_AGE_MAX) {
-			return ESP_FAIL;
-		}
-		if (fabsf(ageStat->offset_delta[i]) > offset_delta_max) {
-			return ESP_FAIL;
-		}
-		data[i * 3] = (uint8_t) ageStat->age[i];
-		const float val = MAX(-offset_delta_max, MIN(offset_delta_max, ageStat->offset_delta[i]));
-		const int16_t val_int = (int16_t) (val * 10000);
-		data[i * 3 + 1] = (uint8_t) (val_int >> 8);
-		data[i * 3 + 2] = (uint8_t) (val_int & 0xFF);
-	}
-	return rv3032_writeEEPROMBuff(E_RV3032_EEEROM_AGE_STAT, data, sizeof(data));
+esp_err_t rv3032_writeEEPROMTempCoef(const double tempCoef[3]) {
+	uint8_t data[3] = {};
+	const double p0 = MIN(MAX(0, tempCoef[0]), RV3032_TEMP_COEF0_MAX) / RV3032_TEMP_COEF0_MAX;
+	const double p1 = MIN(MAX(-RV3032_TEMP_COEF1_MAX, tempCoef[1]), RV3032_TEMP_COEF1_MAX) / RV3032_TEMP_COEF1_MAX;
+	const double p2 = MIN(MAX(-RV3032_TEMP_COEF2_MAX, tempCoef[2]), RV3032_TEMP_COEF2_MAX) / RV3032_TEMP_COEF2_MAX;
+	const int8_t p1_int = (int8_t) (p1 * INT8_MAX);
+	const int8_t p2_int = (int8_t) (p2 * INT8_MAX);
+	data[0] = (uint8_t) (p0 * UINT8_MAX);
+	data[1] = (uint8_t) p1_int;
+	data[2] = (uint8_t) p2_int;
+	return rv3032_writeEEPROMBuff(E_RV3032_EEEROM_TEMP_COEF, data, sizeof(data));
 }
 
 
-esp_err_t rv3032_getEEPROMAgeStat(rtc_age_stat_t* ageStat) {
-	uint8_t data[9] = {};
-	RV_ERRCHECK(rv3032_readEEPROMBuff(E_RV3032_EEEROM_AGE_STAT, data, sizeof(data)));
-	bool all_zero = true;
-	for (int i = 0; i < sizeof(data); i++) {
-		all_zero &= data[i] == 0;
-	}
-	if (all_zero) {
-		return ESP_FAIL;
-	}
-	for (int i = 0; i < 3; i++) {
-		ageStat->age[i] = (int8_t) data[i * 3];
-		if (ageStat->age[i] < RV3032_AGE_MIN || ageStat->age[i] > RV3032_AGE_MAX) {
-			memset(ageStat, 0, sizeof(rtc_age_stat_t));
-			return ESP_FAIL;
-		}
-		uint16_t val = (((uint16_t) data[i * 3 + 1]) << 8) | data[i * 3 + 2];
-		ageStat->offset_delta[i] = ((int16_t) val) / 10000.0;
-		if (fabsf(ageStat->offset_delta[i]) > offset_delta_max) {
-			memset(ageStat, 0, sizeof(rtc_age_stat_t));
-			return ESP_FAIL;
-		}
-	}
-	// Fix EEPROM cell bug!
-	ageStat->age[2] = MIN(RV3032_AGE_MAX, ageStat->age[1] + 1);
+esp_err_t rv3032_getEEPROMTempCoef(double tempCoef[3]) {
+	uint8_t data[3] = {};
+	RV_ERRCHECK(rv3032_readEEPROMBuff(E_RV3032_EEEROM_TEMP_COEF, data, sizeof(data)));
+	tempCoef[0] = (         data[0] / (double) UINT8_MAX) * RV3032_TEMP_COEF0_MAX;
+	tempCoef[1] = ((int8_t) data[1] / (double) INT8_MAX) * RV3032_TEMP_COEF1_MAX;
+	tempCoef[2] = ((int8_t) data[2] / (double) INT8_MAX) * RV3032_TEMP_COEF2_MAX;
 	return ESP_OK;
 }
 

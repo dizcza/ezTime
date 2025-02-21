@@ -167,19 +167,14 @@
 #define E_RV3032_EEPROM_ESYN_SUPPORTED  (E_RV3032_USER_EEPROM_START + 0)  // 1 byte
 #define E_RV3032_EEPROM_AGE_BEST        (E_RV3032_USER_EEPROM_START + 1)  // 1 byte
 #define E_RV3032_EEPROM_CLKOUT_OFFSET   (E_RV3032_USER_EEPROM_START + 2)  // 2 bytes
-#define E_RV3032_EEEROM_AGE_STAT        (E_RV3032_USER_EEPROM_START + 4)  // 9 bytes
+#define E_RV3032_EEEROM_AGE_ROOM        (E_RV3032_USER_EEPROM_START + 4)  // 1 byte
+#define E_RV3032_EEEROM_TEMP_COEF       (E_RV3032_USER_EEPROM_START + 5)  // 3 bytes
 
 
 typedef struct {
 	struct tm tm;
 	uint8_t seconds100th;
 } rv3032_time_t;
-
-
-typedef struct {
-	int8_t age[3];
-	float offset_delta[3];
-} rtc_age_stat_t;
 
 
 enum RV3032_CLKOUT{
@@ -271,10 +266,12 @@ bool rv3032_getEEPROMESYNSupported();
 esp_err_t rv3032_writeEEPROMESYNSupported(bool val);
 esp_err_t rv3032_writeEEPROMAgeBest(int8_t ageBest);
 int8_t rv3032_getEEPROMAgeBest();
+int8_t rv3032_getEEPROMAgeRoom();
+esp_err_t rv3032_writeEEPROMAgeRoom(int8_t ageRoom);
 esp_err_t rv3032_writeEEPROMClkoutOffset(int32_t offset);
 int32_t rv3032_getEEPROMClkoutOffset();
-esp_err_t rv3032_writeEEPROMAgeStat(const rtc_age_stat_t* ageStat);
-esp_err_t rv3032_getEEPROMAgeStat(rtc_age_stat_t* ageStat);
+esp_err_t rv3032_writeEEPROMTempCoef(const double tempCoef[3]);
+esp_err_t rv3032_getEEPROMTempCoef(double tempCoef[3]);
 
 #ifdef __cplusplus
 }
