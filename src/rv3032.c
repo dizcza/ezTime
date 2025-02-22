@@ -546,14 +546,21 @@ int8_t rv3032_getEEPROMAgeBest() {
 }
 
 
-int8_t rv3032_getEEPROMAgeRoom() {
-	return rv3032_convertByteToAge(rv3032_readUserEEPROM(E_RV3032_EEEROM_AGE_ROOM));
+double rv3032_getEEPROMAgeRoom() {
+	int8_t ageInt = (int8_t) rv3032_readUserEEPROM(E_RV3032_EEEROM_AGE_ROOM);
+	double ageF = ((double) ageInt * 32) / INT8_MAX;
+	if (ageF > 31) ageF = 31;
+	if (ageF < -32) ageF = -32;
+	return ageF;
 }
 
 
-esp_err_t rv3032_writeEEPROMAgeRoom(int8_t ageRoom) {
-	RV_ERRCHECK(rv3032_writeUserEEPROM(E_RV3032_EEEROM_AGE_ROOM, rv3032_convertAgeToByte(ageRoom)));
-	ESP_LOGI(TAG, "Saved AGE ROOM %d", ageRoom);
+esp_err_t rv3032_writeEEPROMAgeRoom(double ageRoom) {
+	int ageInt = (int) (ageRoom * INT8_MAX / 32);
+	if (ageInt < INT8_MIN) ageInt = INT8_MIN;
+	if (ageInt > INT8_MAX) ageInt = INT8_MAX;
+	RV_ERRCHECK(rv3032_writeUserEEPROM(E_RV3032_EEEROM_AGE_ROOM, (uint8_t) ageInt));
+	ESP_LOGI(TAG, "Saved AGE ROOM %.2f", ageRoom);
 	return ESP_OK;
 }
 
