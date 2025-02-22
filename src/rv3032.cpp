@@ -16,6 +16,7 @@ static TwoWire* _i2cPort = nullptr;
 extern "C" void rv3032_init(void *i2cPort)
 {
 	_i2cPort = (TwoWire*) i2cPort;
+	rv3032_postInit();
 }
 
 

@@ -224,6 +224,8 @@ void rv3032_init(void *i2cPort);
 esp_err_t rv3032_init(int port, int sda_gpio, int scl_gpio);
 #endif
 
+void rv3032_postInit();  // Users should not call this function
+
 void rv3032_deinit();
 
 esp_err_t rv3032_ping();

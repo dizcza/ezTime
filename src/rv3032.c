@@ -107,7 +107,14 @@ esp_err_t rv3032_init(int port, int sda_gpio, int scl_gpio)
     i2cdev.cfg.master.clk_speed = 400000;
     i2c_dev_create_mutex(&i2cdev);
     RV_ERRCHECK(rv3032_ping());
-    rv3032_writeReg(R_RV3032_STATUS, 0);  // clear the status
+    rv3032_postInit();
+    return ESP_OK;
+}
+#endif  // ARDUINO_ARCH_ESP32
+
+
+void rv3032_postInit() {
+	rv3032_writeReg(R_RV3032_STATUS, 0);  // clear the status
     rv3032_updateEEPROM(R_RV3032_STATUS);
     rv3032_writeReg(R_RV3032_EVI_CONTROL, 0);
     rv3032_updateEEPROM(R_RV3032_EVI_CONTROL);
@@ -118,9 +125,7 @@ esp_err_t rv3032_init(int port, int sda_gpio, int scl_gpio)
 		rv3032_clearEEPROMTempCoef();
 		rv3032_writeEEPROMVersion(RV3032_VERSION_CURRENT);
 	}
-    return ESP_OK;
 }
-#endif  // ARDUINO_ARCH_ESP32
 
 
 void rv3032_deinit() {
