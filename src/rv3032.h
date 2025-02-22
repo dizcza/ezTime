@@ -170,6 +170,8 @@
 #define E_RV3032_EEEROM_AGE_ROOM        (E_RV3032_USER_EEPROM_START + 4)  // 1 byte
 #define E_RV3032_EEEROM_TEMP_COEF       (E_RV3032_USER_EEPROM_START + 5)  // 3 bytes
 
+#define E_RV3032_EEPROM_VERSION         (E_RV3032_USER_EEPROM_END   - 1)  // 1 byte
+
 
 typedef struct {
 	struct tm tm;
@@ -272,6 +274,8 @@ esp_err_t rv3032_writeEEPROMClkoutOffset(int32_t offset);
 int32_t rv3032_getEEPROMClkoutOffset();
 esp_err_t rv3032_writeEEPROMTempCoef(const double tempCoef[3]);
 esp_err_t rv3032_getEEPROMTempCoef(double tempCoef[3]);
+esp_err_t rv3032_writeEEPROMVersion(uint8_t version);
+uint8_t rv3032_getEEPROMVersion();
 
 #ifdef __cplusplus
 }

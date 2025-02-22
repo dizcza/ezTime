@@ -30,10 +30,15 @@ static i2c_dev_t i2cdev = {};
 #define RV3032_TEMP_COEF1_MAX  (1.00)
 #define RV3032_TEMP_COEF2_MAX  (20.0)
 
+#define RV3032_VERSION_CURRENT (1)
+
 
 #ifndef TAG
 static const char* TAG = "RV3032";
 #endif  /* TAG */
+
+
+static void rv3032_clearEEPROMTempCoef();
 
 
 static uint8_t bcd2bin(uint8_t val)
@@ -107,6 +112,12 @@ esp_err_t rv3032_init(int port, int sda_gpio, int scl_gpio)
     rv3032_writeReg(R_RV3032_EVI_CONTROL, 0);
     rv3032_updateEEPROM(R_RV3032_EVI_CONTROL);
     rv3032_setAgeOffset(rv3032_getEEPROMAgeBest());
+    uint8_t version = rv3032_getEEPROMVersion();
+    ESP_LOGI(TAG, "RV3032 EEPROM loaded version %u", version);
+    if (version < RV3032_VERSION_CURRENT) {
+		rv3032_clearEEPROMTempCoef();
+		rv3032_writeEEPROMVersion(RV3032_VERSION_CURRENT);
+	}
     return ESP_OK;
 }
 #endif  // ARDUINO_ARCH_ESP32
@@ -558,6 +569,13 @@ int32_t rv3032_getEEPROMClkoutOffset() {
 }
 
 
+static void rv3032_clearEEPROMTempCoef() {
+	uint8_t data[3] = {};
+	rv3032_writeEEPROMBuff(E_RV3032_EEEROM_TEMP_COEF, data, sizeof(data));
+	ESP_LOGI(TAG, "RV3032 cleared temperature coefficients");
+}
+
+
 esp_err_t rv3032_writeEEPROMTempCoef(const double tempCoef[3]) {
 	uint8_t data[3] = {};
 	const double p0 = MIN(MAX(0, tempCoef[0]), RV3032_TEMP_COEF0_MAX) / RV3032_TEMP_COEF0_MAX;
@@ -579,5 +597,17 @@ esp_err_t rv3032_getEEPROMTempCoef(double tempCoef[3]) {
 	tempCoef[1] = ((int8_t) data[1] / (double) INT8_MAX) * RV3032_TEMP_COEF1_MAX;
 	tempCoef[2] = ((int8_t) data[2] / (double) INT8_MAX) * RV3032_TEMP_COEF2_MAX;
 	return ESP_OK;
+}
+
+
+esp_err_t rv3032_writeEEPROMVersion(uint8_t version) {
+	RV_ERRCHECK(rv3032_writeUserEEPROM(E_RV3032_EEPROM_VERSION, version));
+	ESP_LOGI(TAG, "RV3032 EEPROM wrote version %u", version);
+	return ESP_OK;
+}
+
+
+uint8_t rv3032_getEEPROMVersion() {
+	return rv3032_readUserEEPROM(E_RV3032_EEPROM_VERSION);
 }
 
