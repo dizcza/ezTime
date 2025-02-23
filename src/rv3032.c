@@ -39,6 +39,8 @@ static const char* TAG = "RV3032";
 
 
 static void rv3032_clearEEPROMTempCoef();
+static esp_err_t rv3032_readEEPROMBuff(uint8_t addr, uint8_t *buff, size_t len);
+static esp_err_t rv3032_writeEEPROMBuff(uint8_t addr, const uint8_t *buff, size_t len);
 
 
 static uint8_t bcd2bin(uint8_t val)
@@ -125,6 +127,12 @@ void rv3032_postInit() {
 		rv3032_clearEEPROMTempCoef();
 		rv3032_writeEEPROMVersion(RV3032_VERSION_CURRENT);
 	}
+	uint8_t data[E_RV3032_USER_EEPROM_END - E_RV3032_USER_EEPROM_START + 1] = {};
+	rv3032_readEEPROMBuff(E_RV3032_USER_EEPROM_START, data, sizeof(data));
+	for (int i = 0; i < sizeof(data); i ++) {
+		ESP_LOGI(TAG, "[%02d] addr=0x%02X val=0x%02X", i, i + E_RV3032_USER_EEPROM_START, data[i]);		
+	}
+	rv3032_writeEEPROMVersion(RV3032_VERSION_CURRENT);
 }
 
 
@@ -292,7 +300,7 @@ esp_err_t rv3032_waitBusy() {
 }
 
 
-esp_err_t rv3032_writeEEPROMBuff(uint8_t addr, const uint8_t *buff, size_t len) {
+static esp_err_t rv3032_writeEEPROMBuff(uint8_t addr, const uint8_t *buff, size_t len) {
     rv3032_setRegisterMask(R_RV3032_CONTROL_1, R_RV3032_CONTROL_1_EERD);  // set EERD = 1
 
     for (int i = 0; i < len; i++) {
@@ -319,7 +327,7 @@ esp_err_t rv3032_refreshEEPROM() {
 }
 
 
-esp_err_t rv3032_readEEPROMBuff(uint8_t addr, uint8_t *buff, size_t len) {
+static esp_err_t rv3032_readEEPROMBuff(uint8_t addr, uint8_t *buff, size_t len) {
     rv3032_setRegisterMask(R_RV3032_CONTROL_1, R_RV3032_CONTROL_1_EERD);  // set EERD = 1
 
     for (int i = 0; i < len; i++) {
@@ -506,7 +514,7 @@ esp_err_t rv3032_enableEVI(bool enable) {
 
 
 uint8_t rv3032_readUserEEPROM(uint8_t addr) {
-	if (addr < E_RV3032_USER_EEPROM_START || addr > E_RV3032_USER_EEPROM_END) {
+	if (addr < E_RV3032_USER_EEPROM_START || addr >= E_RV3032_USER_EEPROM_END) {
 		return 0;
 	}
 	uint8_t regVal = 0;
@@ -516,7 +524,7 @@ uint8_t rv3032_readUserEEPROM(uint8_t addr) {
 
 
 esp_err_t rv3032_writeUserEEPROM(uint8_t addr, uint8_t val) {
-	if (addr < E_RV3032_USER_EEPROM_START || addr > E_RV3032_USER_EEPROM_END) {
+	if (addr < E_RV3032_USER_EEPROM_START || addr >= E_RV3032_USER_EEPROM_END) {
 		return ESP_ERR_INVALID_ARG;
 	}
     RV_ERRCHECK(rv3032_writeEEPROM(addr, val));

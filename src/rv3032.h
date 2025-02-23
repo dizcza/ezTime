@@ -171,6 +171,8 @@
 #define E_RV3032_EEEROM_TEMP_COEF       (E_RV3032_USER_EEPROM_START + 5)  // 3 bytes
 
 #define E_RV3032_EEPROM_VERSION         (E_RV3032_USER_EEPROM_END   - 1)  // 1 byte
+                                                                          // The last byte is non-zero!
+                                                                          // (For some unspecified reason.)
 
 
 typedef struct {
@@ -264,8 +266,8 @@ esp_err_t rv3032_setTrickleCharge(enum RV3032_TCR tcr, enum RV3032_TCM tcm);
 
 esp_err_t rv3032_enableEVI(bool enable);
 
-uint8_t rv3032_readUserEEPROM(uint8_t offset);
-esp_err_t rv3032_writeUserEEPROM(uint8_t offset, uint8_t val);
+uint8_t rv3032_readUserEEPROM(uint8_t addr);
+esp_err_t rv3032_writeUserEEPROM(uint8_t addr, uint8_t val);
 bool rv3032_getEEPROMESYNSupported();
 esp_err_t rv3032_writeEEPROMESYNSupported(bool val);
 esp_err_t rv3032_writeEEPROMAgeBest(int8_t ageBest);
