@@ -26,11 +26,7 @@ static i2c_dev_t i2cdev = {};
     } while (0)
 
 
-#define RV3032_TEMP_COEF0_MAX  (0.01)
-#define RV3032_TEMP_COEF1_MAX  (1.00)
-#define RV3032_TEMP_COEF2_MAX  (20.0)
-
-#define RV3032_VERSION_CURRENT (1)
+#define RV3032_VERSION_CURRENT (3)
 
 
 #ifndef TAG
@@ -98,7 +94,6 @@ static esp_err_t rv3032_clearRegisterMask(uint8_t reg, uint8_t mask) {
 #ifndef ARDUINO_ARCH_ESP32
 esp_err_t rv3032_init(int port, int sda_gpio, int scl_gpio)
 {
-    ESP_LOGI(TAG, "Initializing RV3032");
     memset(&i2cdev, 0, sizeof(i2c_dev_t));
     i2cdev.port = port;
     i2cdev.addr = RV3032_ADDRESS;
@@ -108,7 +103,9 @@ esp_err_t rv3032_init(int port, int sda_gpio, int scl_gpio)
     i2cdev.cfg.scl_pullup_en = GPIO_PULLUP_ENABLE;
     i2cdev.cfg.master.clk_speed = 400000;
     i2c_dev_create_mutex(&i2cdev);
-    RV_ERRCHECK(rv3032_ping());
+    if (rv3032_ping() != ESP_OK) {
+		return ESP_FAIL;
+	}
     rv3032_postInit();
     return ESP_OK;
 }
@@ -116,16 +113,29 @@ esp_err_t rv3032_init(int port, int sda_gpio, int scl_gpio)
 
 
 void rv3032_postInit() {
+    ESP_LOGI(TAG, "Found RTC RV3032 at 0x%02X", RV3032_ADDRESS);
 	rv3032_writeReg(R_RV3032_STATUS, 0);  // clear the status
     rv3032_updateEEPROM(R_RV3032_STATUS);
     rv3032_writeReg(R_RV3032_EVI_CONTROL, 0);
     rv3032_updateEEPROM(R_RV3032_EVI_CONTROL);
     rv3032_setAgeOffset(rv3032_getEEPROMAgeBest());
+    rv3032_setBSM(RV3032_BSM_LEVEL);
+    rv3032_setTrickleCharge(RV3032_TCR_2kOhm, RV3032_TCM_300);
     uint8_t version = rv3032_getEEPROMVersion();
     ESP_LOGI(TAG, "RV3032 EEPROM loaded version %u", version);
-    if (version < RV3032_VERSION_CURRENT) {
+    if (version < 1) {
 		rv3032_clearEEPROMTempCoef();
-		rv3032_writeEEPROMVersion(RV3032_VERSION_CURRENT);
+	}
+	if (version < 2) {
+		uint8_t tempCoef[3] = {};
+		rv3032_getEEPROMTempCoef(tempCoef);
+		tempCoef[2] *= 10;
+		rv3032_writeEEPROMTempCoef(tempCoef);
+	}
+	if (version < 3) {
+		int8_t ageInt = (int8_t) rv3032_readUserEEPROM(E_RV3032_EEPROM_AGE_ROOM_UNUSED);
+		double ageRoom = ((double) ageInt * 32) / INT8_MAX;
+		rv3032_writeEEPROMAgeRoom(ageRoom);
 	}
 	uint8_t data[E_RV3032_USER_EEPROM_END - E_RV3032_USER_EEPROM_START + 1] = {};
 	rv3032_readEEPROMBuff(E_RV3032_USER_EEPROM_START, data, sizeof(data));
@@ -555,19 +565,21 @@ int8_t rv3032_getEEPROMAgeBest() {
 
 
 double rv3032_getEEPROMAgeRoom() {
-	int8_t ageInt = (int8_t) rv3032_readUserEEPROM(E_RV3032_EEEROM_AGE_ROOM);
-	double ageF = ((double) ageInt * 32) / INT8_MAX;
-	if (ageF > 31) ageF = 31;
-	if (ageF < -32) ageF = -32;
-	return ageF;
+	uint8_t data[2] = {};
+	rv3032_readEEPROMBuff(E_RV3032_EEPROM_AGE_ROOM, data, sizeof(data));
+	int8_t ageF = (int8_t) data[1];  // convert to signed int first
+	double ageRoom = (int8_t) data[0] + ((double) ageF) / INT8_MAX;
+	if (ageRoom > RV3032_AGE_MAX) ageRoom = RV3032_AGE_MAX;
+	if (ageRoom < RV3032_AGE_MIN) ageRoom = RV3032_AGE_MIN;
+	return ageRoom;
 }
 
 
 esp_err_t rv3032_writeEEPROMAgeRoom(double ageRoom) {
-	int ageInt = (int) (ageRoom * INT8_MAX / 32);
-	if (ageInt < INT8_MIN) ageInt = INT8_MIN;
-	if (ageInt > INT8_MAX) ageInt = INT8_MAX;
-	RV_ERRCHECK(rv3032_writeUserEEPROM(E_RV3032_EEEROM_AGE_ROOM, (uint8_t) ageInt));
+	int8_t ageInt = (int8_t) ageRoom;
+	int8_t ageF = (int8_t) ((ageRoom - ageInt) * INT8_MAX);
+	uint8_t data[2] = {(uint8_t) ageInt, (uint8_t) ageF};
+	RV_ERRCHECK(rv3032_writeEEPROMBuff(E_RV3032_EEPROM_AGE_ROOM, data, sizeof(data)));
 	ESP_LOGI(TAG, "Saved AGE ROOM %.2f", ageRoom);
 	return ESP_OK;
 }
@@ -591,32 +603,18 @@ int32_t rv3032_getEEPROMClkoutOffset() {
 
 static void rv3032_clearEEPROMTempCoef() {
 	uint8_t data[3] = {};
-	rv3032_writeEEPROMBuff(E_RV3032_EEEROM_TEMP_COEF, data, sizeof(data));
+	rv3032_writeEEPROMBuff(E_RV3032_EEPROM_TEMP_COEF, data, sizeof(data));
 	ESP_LOGI(TAG, "RV3032 cleared temperature coefficients");
 }
 
 
-esp_err_t rv3032_writeEEPROMTempCoef(const double tempCoef[3]) {
-	uint8_t data[3] = {};
-	const double p0 = MIN(MAX(0, tempCoef[0]), RV3032_TEMP_COEF0_MAX) / RV3032_TEMP_COEF0_MAX;
-	const double p1 = MIN(MAX(-RV3032_TEMP_COEF1_MAX, tempCoef[1]), RV3032_TEMP_COEF1_MAX) / RV3032_TEMP_COEF1_MAX;
-	const double p2 = MIN(MAX(-RV3032_TEMP_COEF2_MAX, tempCoef[2]), RV3032_TEMP_COEF2_MAX) / RV3032_TEMP_COEF2_MAX;
-	const int8_t p1_int = (int8_t) (p1 * INT8_MAX);
-	const int8_t p2_int = (int8_t) (p2 * INT8_MAX);
-	data[0] = (uint8_t) (p0 * UINT8_MAX);
-	data[1] = (uint8_t) p1_int;
-	data[2] = (uint8_t) p2_int;
-	return rv3032_writeEEPROMBuff(E_RV3032_EEEROM_TEMP_COEF, data, sizeof(data));
+esp_err_t rv3032_writeEEPROMTempCoef(const uint8_t tempCoef[3]) {
+	return rv3032_writeEEPROMBuff(E_RV3032_EEPROM_TEMP_COEF, tempCoef, 3);
 }
 
 
-esp_err_t rv3032_getEEPROMTempCoef(double tempCoef[3]) {
-	uint8_t data[3] = {};
-	RV_ERRCHECK(rv3032_readEEPROMBuff(E_RV3032_EEEROM_TEMP_COEF, data, sizeof(data)));
-	tempCoef[0] = (         data[0] / (double) UINT8_MAX) * RV3032_TEMP_COEF0_MAX;
-	tempCoef[1] = ((int8_t) data[1] / (double) INT8_MAX) * RV3032_TEMP_COEF1_MAX;
-	tempCoef[2] = ((int8_t) data[2] / (double) INT8_MAX) * RV3032_TEMP_COEF2_MAX;
-	return ESP_OK;
+esp_err_t rv3032_getEEPROMTempCoef(uint8_t tempCoef[3]) {
+	return rv3032_readEEPROMBuff(E_RV3032_EEPROM_TEMP_COEF, tempCoef, 3);
 }
 
 

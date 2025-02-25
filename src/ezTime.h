@@ -812,8 +812,6 @@ namespace ezt {
 			static bool writeReg(uint8_t reg_addr, const uint8_t* data, size_t len);
 			static uint8_t readReg(uint8_t reg_addr);
 			static bool readReg(uint8_t reg_addr, uint8_t* data_out, size_t len);
-			static uint8_t bcd2bin(uint8_t val);
-			static uint8_t bin2bcd(uint8_t val);
 	};
 
 	extern RV3032 RTC;
