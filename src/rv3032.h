@@ -267,7 +267,7 @@ esp_err_t rv3032_setTrickleCharge(enum RV3032_TCR tcr, enum RV3032_TCM tcm);
 
 esp_err_t rv3032_enableEVI(bool enable);
 
-uint8_t rv3032_readUserEEPROM(uint8_t addr);
+esp_err_t rv3032_readUserEEPROM(uint8_t addr, uint8_t* val);
 esp_err_t rv3032_writeUserEEPROM(uint8_t addr, uint8_t val);
 bool rv3032_getEEPROMESYNSupported();
 esp_err_t rv3032_writeEEPROMESYNSupported(bool val);

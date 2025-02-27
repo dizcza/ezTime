@@ -20,8 +20,17 @@ static i2c_dev_t i2cdev = {};
 #define RV_ERRCHECK(ARG)  do { \
     esp_err_t err = (ARG); \
     if (err != ESP_OK) { \
-        ESP_LOGW(TAG, "%s line %d: %s", __FUNCTION__, __LINE__, esp_err_to_name(err)); \
+        ESP_LOGI(TAG, "%s line %d: %s", __FUNCTION__, __LINE__, esp_err_to_name(err)); \
         return err; \
+    } \
+    } while (0)
+
+
+#define RV_CLEANUP(ARG)  do { \
+    err = (ARG); \
+    if (err != ESP_OK) { \
+        ESP_LOGI(TAG, "%s line %d: %s", __FUNCTION__, __LINE__, esp_err_to_name(err)); \
+        goto CLEANUP; \
     } \
     } while (0)
 
@@ -123,19 +132,11 @@ void rv3032_postInit() {
     rv3032_setTrickleCharge(RV3032_TCR_2kOhm, RV3032_TCM_300);
     uint8_t version = rv3032_getEEPROMVersion();
     ESP_LOGI(TAG, "RV3032 EEPROM loaded version %u", version);
-    if (version < 1) {
+    if (version < 2) {
 		rv3032_clearEEPROMTempCoef();
 	}
-	if (version < 2) {
-		uint8_t tempCoef[3] = {};
-		rv3032_getEEPROMTempCoef(tempCoef);
-		tempCoef[2] *= 10;
-		rv3032_writeEEPROMTempCoef(tempCoef);
-	}
 	if (version < 3) {
-		int8_t ageInt = (int8_t) rv3032_readUserEEPROM(E_RV3032_EEPROM_AGE_ROOM_UNUSED);
-		double ageRoom = ((double) ageInt * 32) / INT8_MAX;
-		rv3032_writeEEPROMAgeRoom(ageRoom);
+		rv3032_writeEEPROMAgeRoom(0);
 	}
 	uint8_t data[E_RV3032_USER_EEPROM_END - E_RV3032_USER_EEPROM_START + 1] = {};
 	rv3032_readEEPROMBuff(E_RV3032_USER_EEPROM_START, data, sizeof(data));
@@ -313,17 +314,19 @@ esp_err_t rv3032_waitBusy() {
 static esp_err_t rv3032_writeEEPROMBuff(uint8_t addr, const uint8_t *buff, size_t len) {
     rv3032_setRegisterMask(R_RV3032_CONTROL_1, R_RV3032_CONTROL_1_EERD);  // set EERD = 1
 
+	esp_err_t err = ESP_OK;
     for (int i = 0; i < len; i++) {
-	    rv3032_writeReg(R_RV3032_EE_ADDRESS, addr + i);
-	    rv3032_waitBusy();
-	    rv3032_writeReg(R_RV3032_EE_DATA, buff[i]);
-	    rv3032_waitBusy();
-	    rv3032_writeReg(R_RV3032_EE_COMMAND, R_RV3032_EE_COMMAND_WRITE);
-	    rv3032_waitBusy();
+	    RV_CLEANUP(rv3032_writeReg(R_RV3032_EE_ADDRESS, addr + i));
+	    RV_CLEANUP(rv3032_waitBusy());
+	    RV_CLEANUP(rv3032_writeReg(R_RV3032_EE_DATA, buff[i]));
+	    RV_CLEANUP(rv3032_waitBusy());
+	    RV_CLEANUP(rv3032_writeReg(R_RV3032_EE_COMMAND, R_RV3032_EE_COMMAND_WRITE));
+	    RV_CLEANUP(rv3032_waitBusy());
 	}
-    
+
+CLEANUP:
     rv3032_clearRegisterMask(R_RV3032_CONTROL_1, R_RV3032_CONTROL_1_EERD);  // set EERD = 0
-    return ESP_OK;
+    return err;
 }
 
 
@@ -340,17 +343,19 @@ esp_err_t rv3032_refreshEEPROM() {
 static esp_err_t rv3032_readEEPROMBuff(uint8_t addr, uint8_t *buff, size_t len) {
     rv3032_setRegisterMask(R_RV3032_CONTROL_1, R_RV3032_CONTROL_1_EERD);  // set EERD = 1
 
+	esp_err_t err = ESP_OK;
     for (int i = 0; i < len; i++) {
-	    rv3032_writeReg(R_RV3032_EE_ADDRESS, addr + i);
-	    rv3032_waitBusy();
-	    rv3032_writeReg(R_RV3032_EE_COMMAND, R_RV3032_EE_COMMAND_READ);
-	    rv3032_waitBusy();
-	    rv3032_readReg(R_RV3032_EE_DATA, &buff[i]);
-	    rv3032_waitBusy();
+	    RV_CLEANUP(rv3032_writeReg(R_RV3032_EE_ADDRESS, addr + i));
+	    RV_CLEANUP(rv3032_waitBusy());
+	    RV_CLEANUP(rv3032_writeReg(R_RV3032_EE_COMMAND, R_RV3032_EE_COMMAND_READ));
+	    RV_CLEANUP(rv3032_waitBusy());
+	    RV_CLEANUP(rv3032_readReg(R_RV3032_EE_DATA, &buff[i]));
+	    RV_CLEANUP(rv3032_waitBusy());
     }
-	    
+
+CLEANUP:
     rv3032_clearRegisterMask(R_RV3032_CONTROL_1, R_RV3032_CONTROL_1_EERD);  // set EERD = 0
-    return ESP_OK;
+    return err;
 }
 
 
@@ -516,20 +521,18 @@ esp_err_t rv3032_enableEVI(bool enable) {
     RV_ERRCHECK(rv3032_writeReg(R_RV3032_EVI_CONTROL, regVal));
 
     // Set CEIE bit to 1 if you want to enable clock output when external event occurs
-    rv3032_setRegisterMask(R_RV3032_COCK_INT_MASK, R_RV3032_COCK_INT_MASK_CEIE);
+    RV_ERRCHECK(rv3032_setRegisterMask(R_RV3032_COCK_INT_MASK, R_RV3032_COCK_INT_MASK_CEIE));
     
     ESP_LOGI(TAG, "%s %s", __func__, enable ? "enabled" : "disabled");
     return ESP_OK;
 }
 
 
-uint8_t rv3032_readUserEEPROM(uint8_t addr) {
+esp_err_t rv3032_readUserEEPROM(uint8_t addr, uint8_t* val) {
 	if (addr < E_RV3032_USER_EEPROM_START || addr >= E_RV3032_USER_EEPROM_END) {
-		return 0;
+		return ESP_ERR_INVALID_ARG;
 	}
-	uint8_t regVal = 0;
-	rv3032_readEEPROM(addr, &regVal);
-	return regVal;
+	return rv3032_readEEPROM(addr, val);
 }
 
 
@@ -543,7 +546,9 @@ esp_err_t rv3032_writeUserEEPROM(uint8_t addr, uint8_t val) {
 
 
 bool rv3032_getEEPROMESYNSupported() {
-	return rv3032_readUserEEPROM(E_RV3032_EEPROM_ESYN_SUPPORTED);
+	uint8_t data = 0;
+	rv3032_readUserEEPROM(E_RV3032_EEPROM_ESYN_SUPPORTED, &data);
+	return data;
 }
 
 
@@ -560,7 +565,12 @@ esp_err_t rv3032_writeEEPROMAgeBest(int8_t ageBest) {
 
 
 int8_t rv3032_getEEPROMAgeBest() {
-	return rv3032_convertByteToAge(rv3032_readUserEEPROM(E_RV3032_EEPROM_AGE_BEST));
+	uint8_t data = 0;
+	if (rv3032_readUserEEPROM(E_RV3032_EEPROM_AGE_BEST, &data) != ESP_OK) {
+		ESP_LOGI(TAG, "%s failed, returning 0", __func__);
+		return 0;
+	}
+	return rv3032_convertByteToAge(data);
 }
 
 
@@ -619,13 +629,16 @@ esp_err_t rv3032_getEEPROMTempCoef(uint8_t tempCoef[3]) {
 
 
 esp_err_t rv3032_writeEEPROMVersion(uint8_t version) {
-	RV_ERRCHECK(rv3032_writeUserEEPROM(E_RV3032_EEPROM_VERSION, version));
-	ESP_LOGI(TAG, "RV3032 EEPROM wrote version %u", version);
+	if (rv3032_writeUserEEPROM(E_RV3032_EEPROM_VERSION, version) == ESP_OK) {
+		ESP_LOGI(TAG, "RV3032 EEPROM wrote version %u", version);
+	}
 	return ESP_OK;
 }
 
 
 uint8_t rv3032_getEEPROMVersion() {
-	return rv3032_readUserEEPROM(E_RV3032_EEPROM_VERSION);
+	uint8_t version = RV3032_VERSION_CURRENT;
+	rv3032_readUserEEPROM(E_RV3032_EEPROM_VERSION, &version);
+	return version;
 }
 
