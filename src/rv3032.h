@@ -165,11 +165,9 @@
 #define RV3032_AGE_RANGE            (RV3032_AGE_MAX - RV3032_AGE_MIN + 1)
 
 #define E_RV3032_EEPROM_ESYN_SUPPORTED  (E_RV3032_USER_EEPROM_START + 0)  // 1 byte
-#define E_RV3032_EEPROM_AGE_BEST        (E_RV3032_USER_EEPROM_START + 1)  // 1 byte
-#define E_RV3032_EEPROM_CLKOUT_OFFSET   (E_RV3032_USER_EEPROM_START + 2)  // 2 bytes
-#define E_RV3032_EEPROM_AGE_ROOM_UNUSED (E_RV3032_USER_EEPROM_START + 4)  // 1 byte
-#define E_RV3032_EEPROM_TEMP_COEF       (E_RV3032_USER_EEPROM_START + 5)  // 3 bytes
-#define E_RV3032_EEPROM_AGE_ROOM        (E_RV3032_USER_EEPROM_START + 8)  // 2 bytes
+#define E_RV3032_EEPROM_DEVICE_ID       (E_RV3032_USER_EEPROM_START + 1)  // 2 bytes
+#define E_RV3032_EEPROM_AGE_BEST        (E_RV3032_USER_EEPROM_START + 3)  // 1 byte
+#define E_RV3032_EEPROM_TEMP_COEF       (E_RV3032_USER_EEPROM_START + 4)  // 4 bytes
 
 #define E_RV3032_EEPROM_VERSION         (E_RV3032_USER_EEPROM_END   - 1)  // 1 byte
                                                                           // The last byte is non-zero!
@@ -269,16 +267,20 @@ esp_err_t rv3032_enableEVI(bool enable);
 
 esp_err_t rv3032_readUserEEPROM(uint8_t addr, uint8_t* val);
 esp_err_t rv3032_writeUserEEPROM(uint8_t addr, uint8_t val);
+esp_err_t rv3032_eraseUserEEPROM();
+
 bool rv3032_getEEPROMESYNSupported();
 esp_err_t rv3032_writeEEPROMESYNSupported(bool val);
-esp_err_t rv3032_writeEEPROMAgeBest(int8_t ageBest);
+
 int8_t rv3032_getEEPROMAgeBest();
-double rv3032_getEEPROMAgeRoom();
-esp_err_t rv3032_writeEEPROMAgeRoom(double ageRoom);
-esp_err_t rv3032_writeEEPROMClkoutOffset(int32_t offset);
-int32_t rv3032_getEEPROMClkoutOffset();
-esp_err_t rv3032_writeEEPROMTempCoef(const uint8_t tempCoef[3]);
-esp_err_t rv3032_getEEPROMTempCoef(uint8_t tempCoef[3]);
+esp_err_t rv3032_writeEEPROMAgeBest(int8_t ageBest);
+
+esp_err_t rv3032_getEEPROMTempCoef(uint8_t tempCoef[4]);
+esp_err_t rv3032_writeEEPROMTempCoef(const uint8_t tempCoef[4]);
+
+esp_err_t rv3032_getDeviceId(uint8_t data[2]);
+esp_err_t rv3032_writeDeviceId(const uint8_t data[2]);
+
 esp_err_t rv3032_writeEEPROMVersion(uint8_t version);
 uint8_t rv3032_getEEPROMVersion();
 
