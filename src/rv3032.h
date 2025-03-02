@@ -165,10 +165,11 @@
 #define RV3032_AGE_RANGE            (RV3032_AGE_MAX - RV3032_AGE_MIN + 1)
 
 #define E_RV3032_EEPROM_ESYN_SUPPORTED  (E_RV3032_USER_EEPROM_START + 0)  // 1 byte
-#define E_RV3032_EEPROM_DEVICE_ID       (E_RV3032_USER_EEPROM_START + 1)  // 2 bytes
+#define E_RV3032_EEPROM_RESERVED1       (E_RV3032_USER_EEPROM_START + 1)  // 2 bytes (does not store the value)
 #define E_RV3032_EEPROM_AGE_BEST        (E_RV3032_USER_EEPROM_START + 3)  // 1 byte
 #define E_RV3032_EEPROM_TEMP_COEF       (E_RV3032_USER_EEPROM_START + 4)  // 4 bytes
 
+#define E_RV3032_EEPROM_DEVICE_ID       (E_RV3032_USER_EEPROM_END   - 3)  // 2 bytes
 #define E_RV3032_EEPROM_VERSION         (E_RV3032_USER_EEPROM_END   - 1)  // 1 byte
                                                                           // The last byte is non-zero!
                                                                           // (For some unspecified reason.)
