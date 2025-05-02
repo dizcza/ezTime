@@ -273,7 +273,7 @@ esp_err_t rv3032_eraseUserEEPROM();
 bool rv3032_getEEPROMESYNSupported();
 esp_err_t rv3032_writeEEPROMESYNSupported(bool val);
 
-int8_t rv3032_getEEPROMAgeBest();
+esp_err_t rv3032_getEEPROMAgeBest(int8_t* ageBest);
 esp_err_t rv3032_writeEEPROMAgeBest(int8_t ageBest);
 
 esp_err_t rv3032_getEEPROMTempCoef(uint8_t tempCoef[4]);

@@ -108,7 +108,6 @@ void rv3032_postInit() {
     rv3032_updateEEPROM(R_RV3032_STATUS);
     rv3032_writeReg(R_RV3032_EVI_CONTROL, 0);
     rv3032_updateEEPROM(R_RV3032_EVI_CONTROL);
-    rv3032_setAgeOffset(rv3032_getEEPROMAgeBest());
     rv3032_setBSM(RV3032_BSM_LEVEL);
     rv3032_setTrickleCharge(RV3032_TCR_2kOhm, RV3032_TCM_300);
     uint8_t version = rv3032_getEEPROMVersion();
@@ -550,13 +549,11 @@ esp_err_t rv3032_writeEEPROMAgeBest(int8_t ageBest) {
 }
 
 
-int8_t rv3032_getEEPROMAgeBest() {
+esp_err_t rv3032_getEEPROMAgeBest(int8_t* ageBest) {
 	uint8_t data = 0;
-	if (rv3032_readUserEEPROM(E_RV3032_EEPROM_AGE_BEST, &data) != ESP_OK) {
-		ESP_LOGI(TAG, "%s failed, returning 0", __func__);
-		return 0;
-	}
-	return rv3032_convertByteToAge(data);
+	RV_ERRCHECK(rv3032_readUserEEPROM(E_RV3032_EEPROM_AGE_BEST, &data));
+	*ageBest = rv3032_convertByteToAge(data);
+	return ESP_OK;
 }
 
 
