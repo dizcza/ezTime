@@ -2,7 +2,7 @@ file (GLOB SOURCES src/*.cpp src/*.c)
 idf_component_register(
     SRCS ${SOURCES}
     INCLUDE_DIRS src
-    REQUIRES arduino
+    REQUIRES arduino-esp32
 )
 
 list(APPEND DEFINITIONS "ARDUINO_TTGO_T1")

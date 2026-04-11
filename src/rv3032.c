@@ -109,6 +109,7 @@ void rv3032_postInit() {
     rv3032_writeReg(R_RV3032_EVI_CONTROL, 0);
     rv3032_updateEEPROM(R_RV3032_EVI_CONTROL);
     rv3032_setBSM(RV3032_BSM_LEVEL);
+    // MS621FE Charge Voltage: 2.8 to 3.3 V
     rv3032_setTrickleCharge(RV3032_TCR_2kOhm, RV3032_TCM_300);
     uint8_t version = rv3032_getEEPROMVersion();
     ESP_LOGI(TAG, "RV3032 EEPROM version loaded %u current %u", version, RV3032_VERSION_CURRENT);
