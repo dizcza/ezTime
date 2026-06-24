@@ -23,6 +23,7 @@
 // #define EZTIME_MAX_DEBUGLEVEL_INFO
 
 // Cache mechanism, either EEPROM or NVS, not both. (See README)
+// EZTIME_CACHE_NVS requires EZTIME_NETWORK_ENABLE
 //#define EZTIME_CACHE_EEPROM
 #define EZTIME_CACHE_NVS
 
@@ -37,7 +38,7 @@
 //#define EZTIME_RV3028_ENABLE
 
 // RV-3032-C7 RTC connected
-//#define EZTIME_RV3032_ENABLE
+#define EZTIME_RV3032_ENABLE
 
 // Warranty void if edited below this point...
 
